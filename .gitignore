@@ -33,7 +33,7 @@ htmlcov/
 .DS_Store
 
 # Doit
-.doit.db
+.doit.db*
 
 # Marimo
 __marimo__/
