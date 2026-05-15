@@ -1,0 +1,9 @@
+cff-version: 1.2.0
+title: "Learning In Context: Minimal Neural Circuits for Contextual Learning in Humans and Recurrent Networks"
+authors:
+  - family-names: Rashed-Ahmed
+    given-names: A. P.
+type: software
+version: 0.0.0
+repository-code: "https://github.com/APRashedAhmed/Learning-In-Context"
+license: MIT

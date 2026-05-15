@@ -1,0 +1,82 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "learning_in_context"
+version = "0.0.0"
+description = "Code for the Learning In Context paper: minimal neural circuits for contextual learning in humans and recurrent networks."
+authors = [{ name = "APRashedAhmed" }]
+license = { text = "MIT" }
+readme = "README.md"
+requires-python = ">=3.11,<3.12"
+
+dependencies = [
+    "numpy",
+    "pandas",
+    "scipy",
+    "scikit-learn",
+    "statsmodels",
+    "torch",
+    "torchvision",
+    "torchmetrics",
+    "lightning",
+    "omegaconf",
+    "hydra-core",
+    "hydra-colorlog",
+    "loguru",
+    "rich",
+    "tqdm",
+    "seaborn",
+    "matplotlib",
+    "opencv-python",
+    "pillow",
+    "webcolors",
+    "doit",
+    "networkx<3.0",
+    "python-dotenv",
+    "psutil",
+    "requests",
+    "notifiers",
+    "watermark",
+    "typer",
+    "bouncing-ball-task",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest",
+    "ruff",
+    "pyright",
+    "pre-commit",
+    "ipython",
+    "ipdb",
+]
+
+[project.urls]
+Homepage = "https://github.com/APRashedAhmed/Learning-In-Context/"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/learning_in_context"]
+
+[tool.uv]
+extra-index-url = ["https://download.pytorch.org/whl/cu128"]
+
+[tool.uv.sources]
+bouncing-ball-task = { path = "../Bouncing-Ball-Task", editable = true }
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP"]
+ignore = ["E501"]
+
+[tool.pyright]
+include = ["src"]
+typeCheckingMode = "basic"
+pythonVersion = "3.11"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

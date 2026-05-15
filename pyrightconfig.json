@@ -1,0 +1,13 @@
+{
+    "include": ["src"],
+    "exclude": [
+        "**/__pycache__",
+        "**/.venv",
+        "**/build",
+        "**/dist"
+    ],
+    "typeCheckingMode": "basic",
+    "pythonVersion": "3.11",
+    "reportMissingImports": "warning",
+    "reportMissingTypeStubs": "none"
+}
