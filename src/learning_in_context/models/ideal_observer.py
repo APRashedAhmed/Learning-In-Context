@@ -463,21 +463,6 @@ class IdealCountingObserver(IdealObserverModel):
         mask_non_grayzone = ~mask_grayzone  # shape [B, T]
         mask_idx_after_grayzone = torch.logical_and(mask_non_grayzone[:, 1:], mask_grayzone[:, :-1])
 
-        # Compute the longest grayzone length
-        mask_grayzone_padded_int = torch.cat(
-            [
-                torch.zeros((batch_size, 1)),
-                mask_grayzone.int(),
-                torch.zeros((batch_size, 1)),
-            ],
-            dim=1,
-        )
-        mask_grayzone_diff = mask_grayzone_padded_int[:, 1:] - mask_grayzone_padded_int[:, :-1]
-        grayzone_diffs = (mask_grayzone_diff == -1).nonzero(as_tuple=True)[1] - (
-            mask_grayzone_diff == 1
-        ).nonzero(as_tuple=True)[1]
-        max_grayzone_diff = 1 + max(grayzone_diffs) // 2
-
         # Create an index array along the time axis.
         timesteps_arange = torch.arange(timesteps)  # shape [T]
         # For valid entries, keep their time index; for masked entries, set index to -1.
@@ -562,13 +547,13 @@ class IdealCountingObserver(IdealObserverModel):
         mask_grayzone_with_velocity_change_bounce = self.find_overlapping_grayzone(
             mask_grayzone[:, 2:] | mask_idx_after_grayzone[:, 1:],
             self.velocity_change_bounce & mask_grayzone[:, 2:],
-            max_grayzone_diff,
+            mask_grayzone[:, 2:],
         )
 
         mask_grayzone_with_velocity_change_random = self.find_overlapping_grayzone(
             mask_grayzone[:, 2:] | mask_idx_after_grayzone[:, 1:],
             self.velocity_change_random & mask_grayzone[:, 2:],
-            max_grayzone_diff,
+            mask_grayzone[:, 2:],
         )
 
         mask_grayzone_with_velocity_change = torch.logical_or(
@@ -703,27 +688,32 @@ class IdealCountingObserver(IdealObserverModel):
 
     def find_overlapping_grayzone(
         self,
-        mask_grayzone,
+        mask_cells,
         mask_change,
-        max_grayzone_diff,
+        mask_run,
     ):
-        timesteps_mask_change = mask_change.shape[1]
-        timesteps_mask_change_arange = torch.arange(
-            mask_change.shape[1],
-            device=mask_change.device,
-        )
-        i_grid = timesteps_mask_change_arange.unsqueeze(1).expand(
-            timesteps_mask_change,
-            timesteps_mask_change,
-        )
-        j_grid = timesteps_mask_change_arange.unsqueeze(0).expand(
-            timesteps_mask_change,
-            timesteps_mask_change,
-        )
-        band = (i_grid >= (j_grid - max_grayzone_diff)) & (i_grid < (j_grid + max_grayzone_diff))
-        return torch.logical_and(
-            mask_grayzone, torch.logical_and(band.unsqueeze(0), mask_change.unsqueeze(1)).any(dim=2)
-        )
+        """Per-run, exit-time, backward-only causal attribution (E3/E4 fix).
+
+        For each grayzone run (a maximal True span of `mask_run`) plus its exit
+        cell, mark every cell in `mask_cells` that has a `mask_change` event at or
+        before it within the SAME run. Backward-only => no future dependence
+        (causal, E3); computed per sequence with no batch-global window
+        (batch-invariant, E4). Replaces the symmetric ±max_grayzone_diff band.
+        """
+        out = torch.zeros_like(mask_cells)
+        batch_size, n = mask_cells.shape
+        for b in range(batch_size):
+            seen = False
+            for j in range(n):
+                run_now = bool(mask_run[b, j])
+                run_prev = bool(mask_run[b, j - 1]) if j > 0 else False
+                if run_now and not run_prev:  # a new grayzone run starts -> reset
+                    seen = False
+                if run_now:  # accumulate events inside the run
+                    seen = seen or bool(mask_change[b, j])
+                if bool(mask_cells[b, j]):  # run interior + its exit cell inherit
+                    out[b, j] = seen
+        return out
 
     def get_all_dist_params(
         self,

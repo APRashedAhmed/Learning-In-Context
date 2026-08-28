@@ -438,9 +438,6 @@ class TestTier2Invariants:
 
 
 class TestBugLedger:
-    @pytest.mark.xfail(
-        strict=True, raises=AssertionError, reason="O6: ICO max_grayzone_diff is batch-global"
-    )
     def test_ico_batch_invariance(self):
         # #3-ICO (C5). A sequence's ICO estimate must not depend on a batch-mate.
         # Non-vacuity verified pre-fix: solo-vs-batch |delta| at [0, n-1] is
@@ -472,9 +469,6 @@ class TestBugLedger:
         a_cont, b_cont = out["betas"][0, 2], out["betas"][0, 3]
         assert (a_cont / (a_cont + b_cont)) > 0.5 + 1e-3  # moved off the 0.5 prior
 
-    @pytest.mark.xfail(
-        strict=True, raises=AssertionError, reason="O1: ICO max_grayzone_diff uses future structure"
-    )
     def test_ico_causality(self):
         # #9-ICO (C10). Estimate at t from a script truncated at t equals the
         # full-script estimate at t (non-start-in-grayzone script).
