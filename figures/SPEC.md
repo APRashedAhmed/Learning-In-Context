@@ -97,8 +97,8 @@ current as of the 2026-08-27 re-derivation. Full per-panel matching evidence:
 | `fig3_task_results.py` | CWC grids: straight-path (x=Grayzone Position, hue=Hazard Rate, cols Participants/RNN/LSTM) + wall-bounce (hue=Contingency) | `DS1-Humans-And-Models.py` — models `:1271-1296`, participants `:1714-1763`, via `hmdcpd.visualization.multi_plot_color_prediction_counts` |
 | `fig4_identifying_units.py` | ElasticNet score curves (F1/Accuracy vs Alpha, chance line) + coefficient heatmaps | `DS2-Identifying-Critical-Units.py` — renderer `plot_coefs_and_metrics` `:607`, chance line `:636`, hazard call `:710`. Grayzone variant: `DS2.1-…-Grayzone.py` |
 | `fig5_unit_activity.py` | Activity time-courses (Low/High HZ + Cont trials, ordered changes) + activity-profile scatters (Step Size × Activity Decay) | **Retrofit existing** `figures/fig_hazard_rate_activity.py` (time-courses `:334-:762`, scatters `:1055-1057`) — already in this repo; analysis origin `DS3-Neural-Tuning.py:340-653` |
-| `fig6_interventions.py` | Intervention time-courses (P(Color Change) vs Timestep, Alpha sweep) + summary point plots (P(Final Color Change) vs Alpha, Type L2L/L2H/H2L/H2H) | `DS4-Interventions.py` — `plot_interventions` `:421`, `plot_interventions_rows` `:522`, hazard `:706+`, contingency `:888+`, point plots `:837`/`:1190`/`:1292`/`:1424`/`:1524` |
-| `fig7_gates.py` | Gate-rescue point plots + gate-delta scatter (Delta Input vs Forget Gate Activity, Blue/Green/Red/Unity) | `DS6.2-Interventions-and-Gates.py:814-920` (rescue), `DS6.4-Relative-Gate-Activities.py:572-581` (scatter), `DS4-Interventions.py:837` (reused cell-unit panel) |
+| `fig6_interventions.py` | Intervention time-courses (P(Color Change) vs Timestep, Alpha sweep) + summary point plots (P(Final Color Change) vs Alpha, Type L2L/L2H/H2L/H2H) | `DS4-Interventions.py` — `plot_interventions` `:421`, `plot_interventions_rows` `:522`, hazard `:706+`, contingency `:888+`, point plots: FINAL cells only `:1150-1192`/`:1279-1313`/`:1520-1526` (early-draft duplicates `:820-836`/`:1332-1339` have stale labels — do not port) |
+| `fig7_gates.py` | Gate-rescue point plots + TWO gate scatters: per-trial (Blue/Green/Red/Unity) and aggregated unit-mean by Color Entered × Model | `DS6.2-Interventions-and-Gates.py:814-920` (rescue; page 1 needs only the `('i','f')` pair), `DS6.4-Relative-Gate-Activities.py:568-590` (per-trial scatter), aggregated scatter reconstructed from stale backup `notebooks/marimo/DS6.4-Relative-Gate-Activities.py:1150-1195` (no current source exists), `DS4-Interventions.py:1279-1313` (reused cell-unit panel; an earlier `:837` cite was wrong) |
 
 Sibling scripts `fig_contingency_activity.py` / `fig_contingency_activities.py`
 in this directory cover Fig 6 p2 material (out of scope) — leave them; they
@@ -163,6 +163,44 @@ share code worth reusing for `fig5`/`fig6`.
    the conventions on real panels before the fig4/6/7 fan-out.
 4. **Git: commit per step** on a work branch/worktree per vcs-rails
    conventions (conventional commits; load `vcr-conventions` before git work).
+   Amended 2026-08-28: committing directly to `main` is fine for now (single
+   agent working; in-place branch creation is vcs-rails-blocked and a separate
+   worktree cannot build a venv while `uv` resolution is broken).
+
+## Operator rulings (2026-08-28, fig5 checkpoint + pre-flight)
+
+5. **Fig5 contingency-scatter recipe confirmed (provisionally).** The deck's
+   contingency profile scatters have no surviving source (dead copy-paste
+   cells in `fig_contingency_activity.py`); the reconstructed recipe —
+   hazard-exemplar units restricted to the 6 contingency models, event =
+   wall bounce causing a color change (`targets[...,-2]==1`) — reproduces the
+   deck's points exactly and is confirmed for now; the operator will
+   investigate further later. Implemented in `transforms.py`
+   (`STAT_UNITS["hz_cont"]`, `criterion_mode="bounce_color_change"`).
+6. **Condition shorthand is "CT"** (spacing), per
+   `paper_style.SHORTENED_CONDITIONS` — the deck's "Cont" labels do NOT
+   override this. fig5's current "Cont" titles must be reverted to CT and the
+   panels regenerated.
+7. **Panel sizing**: shared defaults from the `paper_style` size vocabulary,
+   overridden per panel in that panel's render cell when needed (current
+   implementation is already this shape).
+8. **Fig 4**: fix DS2's dead renderer (2-line `_coefs`/`_hline_chance` bug)
+   when porting, matching DS2.1's correct version; DS2.1/grayzone is out of
+   scope for page 1.
+9. **Fig 6**: correct panel N's title to "All Models Cell Unit Interventions"
+   (the deck's "Hidden" is a published copy-paste bug) — a deliberate,
+   documented deviation from the deck. Port only the polished final point-plot
+   cells (see mapping table).
+10. **Fig 7**: reconstruct the aggregated gate scatter from the stale backup
+    `notebooks/marimo/DS6.4-Relative-Gate-Activities.py:1150-1195`; the reused
+    cell-unit interventions panel ports from `DS4:1279-1313`.
+11. **Dependencies**: repair the broken `uv` lock resolution and add `marimo`
+    to the declared dependencies (it is currently an ad-hoc venv install);
+    fallback if unrepairable within budget: document in `KNOWN-ISSUES.md`.
+12. **Unattended completion run**: figs 4–7 run to full completion (SPEC steps
+    4–6 plus the fig5 touch-ups above) without intermediate operator
+    checkpoints; checkpoint/handoff at the end. Figs 1–3 remain out of scope
+    pending their own specification work.
 
 ## Design rationale (context, skippable)
 
