@@ -481,11 +481,14 @@ class TestBugLedger:
 
     def test_ico_v2_agreement(self):
         # #10 (C11). On a controlled input the two counting observers agree.
-        # Provisionally green: E1 alone brought both estimates to 0.5 on this
-        # script (ICO 0.5, V2 cont 2/4) — the O2 root cause the xfail cited is
-        # gone. Final disposition (green vs xfail-with-new-reason) is Task 6's,
-        # after E2 and E3/E4 land; E2 in particular reshapes V2's grayzone
-        # counts on this script and may re-open the divergence.
+        # DISPOSITION (Task 6, 2026-08-28): PROMOTED TO GREEN. The O2 root
+        # cause the original xfail cited is fixed (E1), and the agreement held
+        # through E2 and E3/E4: both estimators land on 0.5 on this script
+        # (ICO m_ovc[-1] 0.5; V2 cont 2/4). NB this is agreement on ONE
+        # controlled input, not an equivalence proof — the estimators remain
+        # different (Dirichlet 3-way vs per-channel Beta, hard vs expected
+        # counts through occlusion), so a future divergence on a richer script
+        # would be a finding, not a regression of this cell.
         samples = build_samples([_AGREEMENT_SCRIPT])
         ico = IdealCountingObserver(prog_bar=False)
         _, _, m_ovc, _ = ico(samples, return_means=True)
