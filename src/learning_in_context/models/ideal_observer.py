@@ -223,8 +223,12 @@ class IdealCountingObserverV2(torch.nn.Module):
         return_means: bool = False,
     ):
         positions, colors = samples.split([2, 3], dim=-1)  # positions (B,T,2), colors (B,T,3)
-        colors /= scale
-        mask_valid = colors.sum(dim=-1) >= 0  # True iff timestep is inside the trial
+        # E2 fix: detect the grayzone on the UN-scaled colours (mask_color is
+        # [127,127,127]); padding is -1, never the grayzone. Compute before scaling.
+        mask_color = self.mask_color.to(colors.device, colors.dtype)
+        is_gray = (colors == mask_color).all(dim=-1)  # (B, T) True on occluded frames
+        colors = colors / scale  # non-mutating: do NOT write back through the split() view
+        mask_valid = colors.sum(dim=-1) >= 0  # True iff timestep is inside the trial (pad sums < 0)
 
         device = colors.device
         batch_size, timesteps, _ = colors.shape  # NB: timesteps = T_max
@@ -282,8 +286,9 @@ class IdealCountingObserverV2(torch.nn.Module):
             exp_no_change = 1.0 - exp_change
 
             # ------------- classify transition: nongray / gray -------------------
-            visible_prev = step_valid & (colors[:, t - 1, 0] != -1)
-            visible_now = step_valid & (colors[:, t, 0] != -1)
+            # E2 fix: a frame is visible iff it is a valid step AND not the grayzone.
+            visible_prev = step_valid & ~is_gray[:, t - 1]
+            visible_now = step_valid & ~is_gray[:, t]
 
             nongray_transition = visible_prev & visible_now  # fully visible
             gray_transition = step_valid & ~nongray_transition  # any part hidden

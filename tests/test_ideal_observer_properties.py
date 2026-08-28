@@ -396,11 +396,6 @@ class TestTier2Invariants:
         assert torch.allclose(ovc_r, ovc_o, atol=1e-6)
         assert torch.allclose(pvc_r, pvc_o, atol=1e-6)
 
-    @pytest.mark.xfail(
-        strict=True,
-        raises=AssertionError,
-        reason="O3: E1-revived detector counts the grayzone as visible colour 0 until E2",
-    )
     def test_equivariance_rates_v2(self):
         # 6a-V2. The spec matrix called this "green (vacuous, O2)" — true only
         # while the dead detector masked O3. With E1 applied, the broken
@@ -419,19 +414,11 @@ class TestTier2Invariants:
         [
             IdealBayesianObserver,
             IdealCountingObserver,
-            # Discovered while authoring the harness (spec A3 flagged 6b "green*,
-            # may reveal an issue"): pre-E2, V2 reads the grayzone frame as
-            # VISIBLE and its argmax tie-breaks [127,127,127] to colour 0 — a
-            # label-asymmetric emission that breaks belief equivariance. O3's
-            # fix (occlusion branch -> uniform emission) restores it.
-            pytest.param(
-                IdealCountingObserverV2,
-                marks=pytest.mark.xfail(
-                    strict=True,
-                    raises=AssertionError,
-                    reason="O3: grayzone argmax tie-break breaks V2 belief equivariance until E2",
-                ),
-            ),
+            # NB pre-E2 the V2 case failed here (spec A3's flagged "green*"):
+            # the grayzone frame was read as VISIBLE with an argmax tie-break to
+            # colour 0 — label-asymmetric. E2's occlusion branch (uniform
+            # emission on hidden frames) restored equivariance.
+            IdealCountingObserverV2,
         ],
     )
     def test_equivariance_beliefs(self, ctor):
@@ -514,9 +501,6 @@ class TestBugLedger:
 
 
 class TestV2OcclusionAndMutation:
-    @pytest.mark.xfail(
-        strict=True, raises=AssertionError, reason="O3: V2 reads grayzone as visible until E2"
-    )
     def test_v2_grayzone_classified_occluded(self):
         # v2_grayzone (NEW; design E2 §). A [127,127,127] frame must run V2's
         # occlusion branch, not be read as a visible nongray_transition.
@@ -537,12 +521,7 @@ class TestV2OcclusionAndMutation:
         out = IdealCountingObserverV2()(samples, return_means=True)
         assert torch.allclose(out["betas"][0], torch.tensor([2.0, 2.0, 1.0, 1.0]), atol=1e-5)
 
-    @pytest.mark.xfail(
-        strict=True,
-        raises=AssertionError,
-        reason="O3: V2 forward mutates input via in-place /= until E2",
-    )
-    def test_v2_no_input_mutation(self):
+    def test_v2_no_mutation(self):
         # v2_no_mutation (NEW; design E2 §). forward() must not modify the caller's
         # samples tensor (the split() view must not be written back).
         samples = build_samples([_BENIGN_GRAYZONE_SCRIPT])
