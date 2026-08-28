@@ -59,8 +59,8 @@ _COL1 = [_B, _B, _R, _GRAY, _GRAY, _R, _R, _R, _G, _G, _G, _PAD, _PAD, _PAD]
 def samples():
     """A fresh (2, 14, 5) samples tensor: [x, y, r, g, b] per timestep.
 
-    Function-scoped so that ``IdealCountingObserverV2``'s in-place color scaling
-    (characterized below) does not leak between tests.
+    Function-scoped for test isolation (V2's in-place color scaling, which
+    once made this mandatory, was removed by the E2 fix).
     """
     positions = torch.tensor([_POS0, _POS1], dtype=torch.float)
     colors = torch.tensor([_COL0, _COL1], dtype=torch.float)
@@ -156,8 +156,8 @@ class TestIdealCountingObserver:
             torch.tensor([[0.236345, 0.0, 0.763655], [1 / 3, 1 / 3, 1 / 3]]),
             atol=ATOL,
         )
-        assert torch.allclose(m_nvc[:, -1], torch.tensor([0.235294, 0.25]), atol=ATOL)
-        assert torch.allclose(m_ovc[:, -1], torch.tensor([0.25, 0.5]), atol=ATOL)
+        assert torch.allclose(m_nvc[:, -1], torch.tensor([0.235294, 0.263158]), atol=ATOL)
+        assert torch.allclose(m_ovc[:, -1], torch.tensor([0.25, 0.333333]), atol=ATOL)
         assert torch.allclose(m_pvc[:, -1], torch.tensor([0.071429, 0.071429]), atol=ATOL)
 
     def test_deterministic(self, samples):
@@ -196,21 +196,21 @@ class TestIdealCountingObserverV2:
         out = IdealCountingObserverV2()(samples, return_means=True)
         assert (out["p_change"] >= 0).all() and (out["p_change"] <= 1).all()
 
-    def test_forward_scales_input_colors_in_place(self, samples):
-        # Characterized quirk: forward does ``colors /= scale`` on a view of the
-        # input, mutating the caller's tensor. Callers must clone if they reuse it.
-        before = samples[:, :, 2:].clone()
+    def test_forward_does_not_mutate_input_colors(self, samples):
+        # E2 fix: forward no longer writes back through the split() view, so the
+        # caller's tensor is left byte-for-byte unchanged.
+        before = samples.clone()
         IdealCountingObserverV2()(samples, return_means=False)
-        assert torch.allclose(samples[:, :, 2:], before / 255)
+        assert torch.equal(samples, before)
 
     def test_golden_final_outputs(self, samples):
         out = IdealCountingObserverV2()(samples, return_means=True)
         assert torch.allclose(
-            out["betas"], torch.tensor([[1.0, 11.0, 1.0, 1.0], [1.0, 7.0, 1.0, 1.0]]), atol=ATOL
+            out["betas"], torch.tensor([[2.0, 12.0, 2.0, 1.0], [3.0, 8.0, 2.0, 1.0]]), atol=ATOL
         )
         assert torch.allclose(
             out["beliefs"][:, -1],
             torch.tensor([[0.0, 0.0, 1.0], [1 / 3, 1 / 3, 1 / 3]]),
             atol=ATOL,
         )
-        assert torch.allclose(out["p_change"][:, -1], torch.tensor([0.090909, 0.0]), atol=ATOL)
+        assert torch.allclose(out["p_change"][:, -1], torch.tensor([0.153846, 0.0]), atol=ATOL)
