@@ -306,14 +306,13 @@ class IdealCountingObserverV2(torch.nn.Module):
                     .float()
                 )
 
+                # E1 fix: argmax-cyclic detector. The old `%3==1` on one-hot vectors
+                # required all three channels to equal 1 after `.all(-1)`, so it never
+                # fired. argmax names the colour; a change is a single forward step.
                 changed = (
-                    (
-                        ((colors[:, t] - colors[:, t - 1]) % 3 == 1)
-                        & nongray_transition.unsqueeze(-1)
-                    )
-                    .all(-1)
-                    .float()
-                )
+                    ((colors[:, t].argmax(-1) - colors[:, t - 1].argmax(-1)) % 3 == 1)
+                    & nongray_transition
+                ).float()
 
                 mask_no_bounce = nongray_transition & (~bounce_t)
                 mask_bounce = nongray_transition & bounce_t

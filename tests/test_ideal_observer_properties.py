@@ -385,9 +385,8 @@ class TestTier2Invariants:
             for ev in script
         ]
 
-    def test_equivariance_rates(self):
-        # 6a: rate estimates invariant under a cyclic colour relabel
-        # (ICO real; V2 held too — vacuously at the prior while O2 stands).
+    def test_equivariance_rates_ico(self):
+        # 6a-ICO: rate estimates invariant under a cyclic colour relabel.
         orig = build_samples([self._EQUIV_SCRIPT])
         rot = build_samples([self._rotated(self._EQUIV_SCRIPT)])
         ico = IdealCountingObserver(prog_bar=False)
@@ -396,6 +395,21 @@ class TestTier2Invariants:
         assert torch.allclose(nvc_r, nvc_o, atol=1e-6)
         assert torch.allclose(ovc_r, ovc_o, atol=1e-6)
         assert torch.allclose(pvc_r, pvc_o, atol=1e-6)
+
+    @pytest.mark.xfail(
+        strict=True,
+        raises=AssertionError,
+        reason="O3: E1-revived detector counts the grayzone as visible colour 0 until E2",
+    )
+    def test_equivariance_rates_v2(self):
+        # 6a-V2. The spec matrix called this "green (vacuous, O2)" — true only
+        # while the dead detector masked O3. With E1 applied, the broken
+        # visibility test reads the [127,127,127] frame as visible colour 0, so
+        # a rotated script sees a spurious forward-cyclic change (2->0) that the
+        # original (1->0) does not: rate equivariance breaks until E2 hides the
+        # grayzone frame again.
+        orig = build_samples([self._EQUIV_SCRIPT])
+        rot = build_samples([self._rotated(self._EQUIV_SCRIPT)])
         out_o = IdealCountingObserverV2()(orig.clone(), return_means=True)
         out_r = IdealCountingObserverV2()(rot.clone(), return_means=True)
         assert torch.allclose(out_r["betas"], out_o["betas"], atol=1e-6)
@@ -452,12 +466,11 @@ class TestBugLedger:
         _, m_nvc_batch, m_ovc_batch, _ = ico(mate, return_means=True)
         assert torch.allclose(m_ovc_solo[0, n - 1], m_ovc_batch[0, n - 1], atol=1e-6)
 
-    @pytest.mark.xfail(
-        strict=True, raises=AssertionError, reason="O2/O3: V2 change-detector dead for one-hot"
-    )
     def test_v2_rate_recovery(self):
         # #7-V2 (C8). On a fully-visible script with K hand-counted random colour
         # changes in N no-bounce steps, V2's hz channel recovers the Beta mean.
+        # Flipped green by E1 alone (the script is fully visible, so E2 never
+        # enters); the plan expected the flip at E2 — recorded deviation.
         samples = build_samples([_V2_VISIBLE_RANDOM_SCRIPT])
         out = IdealCountingObserverV2()(samples, return_means=True)
         a_hz, b_hz = out["betas"][0, 0], out["betas"][0, 1]
@@ -465,9 +478,6 @@ class TestBugLedger:
             a_hz / (a_hz + b_hz), torch.tensor(beta_mean(1, 1, _K_CHANGES, _N_STEPS)), atol=1e-4
         )
 
-    @pytest.mark.xfail(
-        strict=True, raises=AssertionError, reason="O2: V2 change-detector dead -> channels inert"
-    )
     def test_v2_dissociation(self):
         # #8-V2 (C9). Bounce-only colour changes must raise cont and leave hz at prior.
         samples = build_samples([_BOUNCE_ONLY_VISIBLE_SCRIPT])
@@ -488,13 +498,13 @@ class TestBugLedger:
         _, _, m_ovc_trunc, _ = ico(trunc, return_means=True)
         assert torch.allclose(m_ovc_full[0, _T_CUT], m_ovc_trunc[0, _T_CUT], atol=1e-6)
 
-    @pytest.mark.xfail(
-        strict=True,
-        raises=AssertionError,
-        reason="ICO/V2 divergence; root cause V2 dead change-detector O2 — PI to decide fix vs accept",
-    )
     def test_ico_v2_agreement(self):
         # #10 (C11). On a controlled input the two counting observers agree.
+        # Provisionally green: E1 alone brought both estimates to 0.5 on this
+        # script (ICO 0.5, V2 cont 2/4) — the O2 root cause the xfail cited is
+        # gone. Final disposition (green vs xfail-with-new-reason) is Task 6's,
+        # after E2 and E3/E4 land; E2 in particular reshapes V2's grayzone
+        # counts on this script and may re-open the divergence.
         samples = build_samples([_AGREEMENT_SCRIPT])
         ico = IdealCountingObserver(prog_bar=False)
         _, _, m_ovc, _ = ico(samples, return_means=True)
