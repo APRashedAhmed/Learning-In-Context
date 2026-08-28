@@ -6,10 +6,10 @@ This file focuses on configuration and setup validation only.
 """
 
 import pytest
-import subprocess
 from pathlib import Path
 
 from learning_in_context.config import PipelineConfig
+from .conftest import run_doit
 
 
 @pytest.mark.integration
@@ -118,12 +118,12 @@ class TestDoItVariableIntegration:
     def test_cpu_override_in_task_info(self):
         """Test that cpu=true parameter forces CPU device in task generation."""
         # Test the specific subtask that should contain the command
-        result = subprocess.run([
-            "doit", "info", "extract_model_states:TEST-001:participant",
+        result = run_doit(
+            "info", "extract_model_states:TEST-001:participant",
             "models=TEST-001",
-            "weights_dir=tests/data/weights/analyze", 
-            "cpu=true"
-        ], capture_output=True, text=True)
+            "weights_dir=tests/data/weights/analyze",
+            "cpu=true",
+        )
         
         # Should complete without error (exit code may vary)
         output = result.stdout + result.stderr
@@ -141,12 +141,12 @@ class TestDoItVariableIntegration:
     
     def test_model_selection_override(self):
         """Test that explicit model selection works in test environment."""
-        result = subprocess.run([
-            "doit", "info", "extract_model_states",
+        result = run_doit(
+            "info", "extract_model_states",
             "models=TEST-001,TEST-002",
             "weights_dir=tests/data/weights/analyze",
-            "cpu=true"
-        ], capture_output=True, text=True)
+            "cpu=true",
+        )
         
         output = result.stdout + result.stderr
         
@@ -156,11 +156,11 @@ class TestDoItVariableIntegration:
     
     def test_empty_models_handling(self):
         """Test handling of empty models parameter."""
-        result = subprocess.run([
-            "doit", "info", "extract_model_states",
+        result = run_doit(
+            "info", "extract_model_states",
             "models=",
-            "cpu=true"
-        ], capture_output=True, text=True)
+            "cpu=true",
+        )
         
         # Should not crash, even with no models
         output = result.stdout + result.stderr
@@ -168,13 +168,13 @@ class TestDoItVariableIntegration:
     
     def test_dataset_parameter_in_task_names(self):
         """Test that dataset parameter affects task naming."""
-        result = subprocess.run([
-            "doit", "info", "extract_model_states:TEST-001:participant",
+        result = run_doit(
+            "info", "extract_model_states:TEST-001:participant",
             "models=TEST-001",
             "weights_dir=tests/data/weights/analyze",
             "datasets=participant",
-            "cpu=true"
-        ], capture_output=True, text=True)
+            "cpu=true",
+        )
         
         output = result.stdout + result.stderr
         

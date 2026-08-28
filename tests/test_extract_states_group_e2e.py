@@ -10,9 +10,12 @@ These tests focus on practical outcomes:
 
 import pytest
 import subprocess
+import sys
 import numpy as np
 import shutil
 from pathlib import Path
+
+from .conftest import run_doit
 
 
 @pytest.mark.e2e
@@ -32,7 +35,7 @@ class TestExtractStatesGroupE2E:
     
     def test_basic_task_recognition(self):
         """Test that our tasks are recognized by doit."""
-        result = subprocess.run(["doit", "list"], capture_output=True, text=True)
+        result = run_doit("list")
         
         assert result.returncode == 0, f"doit list failed: {result.stderr}"
         
@@ -45,8 +48,7 @@ class TestExtractStatesGroupE2E:
     
     def test_validate_test_setup(self):
         """Test the test setup validation works."""
-        result = subprocess.run(["doit", "validate_test_setup"], 
-                              capture_output=True, text=True)
+        result = run_doit("validate_test_setup")
         
         # Check if there are DoIt task conflicts (known issue from pipeline updates)
         if "Two different tasks can't have a common target" in result.stderr:
@@ -60,12 +62,12 @@ class TestExtractStatesGroupE2E:
     
     def test_weights_dir_override_recognition(self):
         """Test that weights_dir parameter is recognized in task info."""
-        result = subprocess.run([
-            "doit", "info", "extract_model_states:TEST-001:participant", 
-            "weights_dir=tests/data/weights/analyze", 
+        result = run_doit(
+            "info", "extract_model_states:TEST-001:participant",
+            "weights_dir=tests/data/weights/analyze",
             "models=TEST-001",
-            "cpu=true"  # Force CPU for tests
-        ], capture_output=True, text=True)
+            "cpu=true",  # Force CPU for tests
+        )
         
         # Task info may return non-zero exit codes but still show valid info
         # The important thing is that we get the expected output
@@ -78,19 +80,21 @@ class TestExtractStatesGroupE2E:
     def test_dedicated_test_pipeline_execution(self):
         """Test that the dedicated test pipeline can execute."""
         # Skip if environment has compatibility issues
-        env_check = subprocess.run([
-            "python", "-c", "import torch; import lightning; print('Environment OK')"
-        ], capture_output=True, text=True)
+        env_check = subprocess.run(
+            [sys.executable, "-c", "import torch; import lightning; print('Environment OK')"],
+            capture_output=True, text=True,
+        )
         
         if env_check.returncode != 0:
             pytest.skip(f"Environment not compatible: {env_check.stderr}")
         
         # Run the dedicated test pipeline with CPU override and explicit model selection
-        result = subprocess.run([
-            "doit", "test_extract_states_group", 
+        result = run_doit(
+            "test_extract_states_group",
             "models=TEST-001,TEST-002",
-            "cpu=true"  # Force CPU for tests
-        ], capture_output=True, text=True, timeout=600)  # Longer timeout for sequential execution
+            "cpu=true",  # Force CPU for tests
+            timeout=600,  # Longer timeout for sequential execution
+        )
         
         if result.returncode != 0:
             # If it fails due to environment issues, skip rather than fail
@@ -249,18 +253,18 @@ class TestWeightsDirOverrideEndToEnd:
     def test_weights_dir_override_affects_task_dependencies(self):
         """Test that weights_dir override changes task dependencies."""
         # Test with default weights (should show default models)
-        default_result = subprocess.run([
-            "doit", "info", "extract_model_states",
-            "cpu=true"  # Force CPU for tests
-        ], capture_output=True, text=True)
+        default_result = run_doit(
+            "info", "extract_model_states",
+            "cpu=true",  # Force CPU for tests
+        )
         
         # Test with override weights (should find TEST models)
-        override_result = subprocess.run([
-            "doit", "info", "extract_model_states",
+        override_result = run_doit(
+            "info", "extract_model_states",
             "weights_dir=tests/data/weights/analyze",
             "models=TEST-001,TEST-002",
-            "cpu=true"  # Force CPU for tests
-        ], capture_output=True, text=True)
+            "cpu=true",  # Force CPU for tests
+        )
         
         # Check content rather than exit codes
         default_output = default_result.stdout
@@ -276,12 +280,12 @@ class TestWeightsDirOverrideEndToEnd:
     def test_weights_dir_parameter_persists_through_pipeline(self):
         """Test that weights_dir parameter affects the entire pipeline."""
         # Test extract_states_group with weights_dir override
-        result = subprocess.run([
-            "doit", "info", "extract_states_group",
+        result = run_doit(
+            "info", "extract_states_group",
             "weights_dir=tests/data/weights/analyze",
             "models=TEST-001,TEST-002",
-            "cpu=true"  # Force CPU for tests
-        ], capture_output=True, text=True)
+            "cpu=true",  # Force CPU for tests
+        )
         
         # Check content shows TEST models in dependencies
         output = result.stdout
@@ -295,12 +299,12 @@ class TestErrorHandlingAndEdgeCases:
     
     def test_nonexistent_weights_directory(self):
         """Test behavior with nonexistent weights directory."""
-        result = subprocess.run([
-            "doit", "info", "extract_model_states",
+        result = run_doit(
+            "info", "extract_model_states",
             "weights_dir=/nonexistent/path",
             "models=FAKE-MODEL",
-            "cpu=true"  # Force CPU for tests
-        ], capture_output=True, text=True)
+            "cpu=true",  # Force CPU for tests
+        )
         
         # Should not crash - check that it produces output
         output = result.stdout
@@ -308,11 +312,11 @@ class TestErrorHandlingAndEdgeCases:
     
     def test_empty_models_list(self):
         """Test behavior with empty models list."""
-        result = subprocess.run([
-            "doit", "info", "extract_model_states",
+        result = run_doit(
+            "info", "extract_model_states",
             "models=",  # Empty models
-            "cpu=true"  # Force CPU for tests
-        ], capture_output=True, text=True)
+            "cpu=true",  # Force CPU for tests
+        )
         
         # Should produce output indicating no models
         output = result.stdout
@@ -320,12 +324,12 @@ class TestErrorHandlingAndEdgeCases:
     
     def test_invalid_model_names(self):
         """Test behavior with invalid model names."""
-        result = subprocess.run([
-            "doit", "info", "extract_model_states",
+        result = run_doit(
+            "info", "extract_model_states",
             "weights_dir=tests/data/weights/analyze",
             "models=INVALID-MODEL,ANOTHER-INVALID",
-            "cpu=true"  # Force CPU for tests
-        ], capture_output=True, text=True)
+            "cpu=true",  # Force CPU for tests
+        )
         
         # Should produce output (no valid models found)
         output = result.stdout

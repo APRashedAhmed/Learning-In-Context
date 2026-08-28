@@ -6,10 +6,29 @@ import pytest
 import numpy as np
 import torch
 import tempfile
+import subprocess
+import sys
 from pathlib import Path
 import shutil
 
 from learning_in_context.models.sequence_model import SequenceModel
+
+
+def run_doit(*args, **kwargs):
+    """Invoke the project's ``doit`` CLI hermetically for tests.
+
+    Runs ``python -m doit <args>`` under the interpreter executing the test
+    suite, so the venv's own pinned ``doit`` is used regardless of whether
+    ``.venv/bin`` happens to be on ``PATH``. A bare ``subprocess.run(["doit",
+    ...])`` relies on the ``doit`` console script being on ``PATH``, which does
+    not hold under uv/``.venv`` layouts (it broke the port's doit tests while
+    passing under iccpd's ambient conda ``doit``). Captures text output by
+    default; extra keyword args (e.g. ``timeout``) pass through to
+    ``subprocess.run``.
+    """
+    kwargs.setdefault("capture_output", True)
+    kwargs.setdefault("text", True)
+    return subprocess.run([sys.executable, "-m", "doit", *args], **kwargs)
 
 
 @pytest.fixture(scope="session")
