@@ -362,7 +362,7 @@ def _(
                 change_labels=change_labels,
                 palette=palette,
                 change_idx=CHANGE_IDX,
-                stat_short="Cont",  # deck panel titles read "Low/High Cont Trials"
+                stat_short=paper_style.SHORTENED_CONDITIONS["Contingency"],
                 vline_label="Wall Bounce",
                 T=T,
                 figsize=FIGSIZE_TC,
@@ -455,7 +455,7 @@ def _(
                 change_labels=change_labels,
                 palette=palette,
                 change_idx=CHANGE_IDX,
-                stat_short="Cont",  # deck panel titles read "Low/High Cont Trials"
+                stat_short=paper_style.SHORTENED_CONDITIONS["Contingency"],
                 vline_label="Wall Bounce",
                 T=T,
                 figsize=FIGSIZE_TC,

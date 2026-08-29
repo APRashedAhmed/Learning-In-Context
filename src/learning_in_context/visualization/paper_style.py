@@ -93,5 +93,14 @@ def save_panel(fig, fig_no: int | str, name: str) -> Path:
     out_dir = PANELS_DIR / f"fig{fig_no}"
     out_dir.mkdir(parents=True, exist_ok=True)
     out_path = out_dir / f"{name}.svg"
-    fig.savefig(out_path, format="svg", bbox_inches="tight")
+    # Deterministic SVG output: pin the hash salt (matplotlib otherwise
+    # randomizes per-run ids embedded in the SVG) and strip the embedded
+    # export date, so repeated exports are byte-identical.
+    plt.rcParams["svg.hashsalt"] = name
+    fig.savefig(
+        out_path,
+        format="svg",
+        bbox_inches="tight",
+        metadata={"Date": None},
+    )
     return out_path
