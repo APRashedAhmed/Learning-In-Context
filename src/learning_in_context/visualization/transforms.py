@@ -696,3 +696,259 @@ def intervention_prediction_frame(
         frames.append(melted)
 
     return pd.concat(frames, ignore_index=True)
+
+
+# --------------------------------------------------------------------------- #
+# fig7 — gate-rescue intervention frames + delta-gate-activity scatters
+# --------------------------------------------------------------------------- #
+# Ported (internals verbatim) from
+# ``hmdcpd-analysis/notebooks/DS6.2-Interventions-and-Gates.py`` (gate-frozen
+# "rescue" interventions, ``process_model_predictions`` ``:561``) and
+# ``DS6.4-Relative-Gate-Activities.py`` (per-model / per-unit delta gate
+# activity, ``:507-696``). Both read the "all-states" intervention caches under
+# ``data/cache/interventions/`` and are keyed on ids/params only (SPEC rule 8);
+# arrays are loaded internally, never passed in.
+
+
+def _gate_frozen_npz_name(
+    stat: str, unit: str | None, gate: tuple[str, ...], num_alphas: int
+) -> str:
+    """Reconstruct DS6.2 ``process_model_predictions``'s gate-frozen npz name.
+
+    ``{stat}[-{unit}]-{load_gate}-gate[s]-frozen-centroid-interventions-
+    {num_alphas}-all-states-alphas.npz`` where ``load_gate`` is the gate letters
+    sorted and joined (e.g. ``('i','f')`` → ``"fi"``) and the ``-s`` suffix on
+    ``gate`` appears only for multi-gate freezes (DS6.2 ``:590-592``).
+    """
+    load_gate = "".join(sorted(gate))
+    frozen = f"gate{'s' if len(load_gate) > 1 else ''}-frozen"
+    parts = [stat]
+    if unit is not None:
+        parts.append(unit)
+    parts += [
+        load_gate,
+        frozen,
+        "centroid-interventions",
+        str(num_alphas),
+        "all-states",
+        "alphas.npz",
+    ]
+    return "-".join(parts)
+
+
+@MEMORY.cache
+def gate_rescue_prediction_frame(
+    model_name: str,
+    exp_id: str,
+    stat: str,
+    unit: str | None,
+    gate: tuple[str, ...],
+    num_alphas: int = 11,
+    N: int = 29,
+) -> pd.DataFrame:
+    """Tidy per-model gate-frozen ("rescue") intervention frame (fig7, memoized).
+
+    Same shape as :func:`intervention_prediction_frame`, but reads the
+    gate-frozen "all-states" cache
+    (``interventions/{model_name}/{exp_id}/{stat}-{unit}-{load_gate}-gates-
+    frozen-...-all-states-alphas.npz``) where the named gates are held at their
+    control value while the centroid intervention runs. Ported verbatim from
+    DS6.2's ``process_model_predictions`` (the ``preds`` → melted-frame path,
+    ``:628-644``); ``states``/``gates`` in the npz are ignored here (they feed
+    the separate gate-activity transform).
+
+    Args:
+        gate: gate letters to freeze (e.g. ``("i", "f")``). Passed as a tuple so
+            the cache key stays hashable.
+        num_alphas: number of intervention strengths (DS6.2 default 11).
+        N: timesteps to window before each trial endpoint (DS6.2 rescue: 29).
+
+    Returns:
+        Long DataFrame with the same columns as
+        :func:`intervention_prediction_frame`.
+    """
+    df_data = _interventions_meta()
+    alphas = np.linspace(0, 1, num_alphas)
+    name = _gate_frozen_npz_name(stat, unit, tuple(gate), num_alphas)
+    path = _INTERVENTIONS_ROOT / model_name / exp_id / name
+    preds = np.load(str(path))["preds"]
+
+    color_entered = df_data["color_entered"].values - 1
+    lengths = df_data["length"].values
+
+    preds_list = []
+    for centroid_idx in range(2):
+        centroid_preds = preds[:, centroid_idx]
+        windowed_preds = [
+            _window_samples(centroid_preds[alpha_idx], lengths, N)
+            for alpha_idx in range(num_alphas)
+        ]
+        preds_list.append(np.stack(windowed_preds))
+    preds_int = np.stack(preds_list)
+    _, _, num_videos, timesteps, _num_channels = preds_int.shape
+
+    frames = []
+    for i, preds_norm in enumerate(preds_int):
+        pred_same_color = preds_norm[
+            np.arange(num_alphas)[:, None, None],
+            np.arange(num_videos)[None, :, None],
+            np.arange(timesteps)[None, None, :],
+            color_entered[None, :, None],
+        ]
+        pred_same_color_reshaped = pred_same_color.reshape(-1, timesteps)
+        df_preds = pd.DataFrame(pred_same_color_reshaped)
+        df_preds["Alpha"] = np.repeat(alphas, num_videos)
+        df_preds["Video"] = list(range(num_videos)) * num_alphas
+        df_preds["Hazard Rate"] = list(df_data["Hazard Rate"].values) * num_alphas
+        df_preds["idx_time"] = list(df_data["idx_time"].values) * num_alphas
+        df_preds["Contingency"] = list(df_data["Contingency"].values) * num_alphas
+        df_preds["trial"] = list(df_data["trial"].values) * num_alphas
+        melted = df_preds.melt(
+            id_vars=["Alpha", "Video", "Hazard Rate", "idx_time", "Contingency", "trial"],
+            var_name="Timestep",
+            value_name="Value",
+        )
+        melted["Value"] = 1 - melted["Value"]
+        melted["Centroid"] = i
+        frames.append(melted)
+
+    return pd.concat(frames, ignore_index=True)
+
+
+@MEMORY.cache
+def gate_activity_delta_frame(
+    model_name: str,
+    exp_ids: tuple[str, ...],
+    num_alphas: int = 11,
+    len_gray: int = 24,
+    gate_order: tuple[str, ...] = ("i", "f", "g", "o"),
+) -> pd.DataFrame:
+    """Per-model, per (color_entered × unit) delta gate activity (fig7, memoized).
+
+    Reconstructs DS6.4's ``plot_df_1`` (``:678-696``): for every model, the
+    signed change in each LSTM gate's per-unit activity between the two extreme
+    centroid interventions (alpha 0 → 1), oriented so the delta always reads
+    "High Hz minus Low Hz" — i.e. toward the target hazard rate. Both fig7 gate
+    scatters derive from this single frame:
+
+    * the single-model scatter is ``frame[frame.model == exemplar]`` (48 rows =
+      3 colours × 16 units),
+    * the aggregated unit-mean scatter is
+      ``frame.groupby(["color_entered", "model"])[["i","f","g","o"]].mean()``
+      (30 rows = 3 colours × 10 models).
+
+    Ported verbatim from DS6.4: the per-model ``df_ints`` build (``:427-460``),
+    the delta computation (``:653-674``), and the per-unit melt/merge
+    (``:678-694``). Only the plain "all-states" cell-unit cache
+    (``hz-cell-centroid-interventions-{num_alphas}-all-states-alphas.npz``) is
+    read; only its ``gates`` array is loaded (the ~4 GB per model), keyed on
+    ids/params (SPEC rule 8).
+
+    The restriction to ``idx_time == 2`` trials, ``alpha ∈ {0, 1}`` and the last
+    ``len_gray`` valid timesteps is applied *before* materializing rows — this is
+    output-identical to DS6.4 (which builds the full frame then filters at
+    ``:659``) but avoids holding hundreds of thousands of unused rows.
+
+    Returns:
+        DataFrame with columns ``[color_entered, unit_idx, i, f, g, o, model]``.
+    """
+    meta = _interventions_meta()
+    lengths = meta["length"].values
+    hazard = meta["Hazard Rate"].values
+    color_entered_idx = meta["color_entered"].values - 1
+    array_color = np.array(["Red", "Green", "Blue"])
+    idx_time2 = meta["idx_time"].values == 2
+
+    # centroid index → intervention target hazard rate (DS6.4 dict_ints_name).
+    dict_ints_name = {0: "Low", 1: "High"}
+    alpha_idxs = [0, num_alphas - 1]
+
+    per_model = []
+    for exp_id in exp_ids:
+        name = f"hz-cell-centroid-interventions-{num_alphas}-all-states-alphas.npz"
+        gates = np.load(str(_INTERVENTIONS_ROOT / model_name / exp_id / name))["gates"]
+        _num_alphas, _num_cent, _batch, timesteps, gate_width = gates.shape
+        num_units = gate_width // len(gate_order)
+
+        columns_gates = [
+            f"{g.upper()}{u}" for g in gate_order for u in range(num_units)
+        ]
+        dict_column_gates = {
+            g: [c for c in columns_gates if c.startswith(g.upper())]
+            for g in gate_order
+        }
+
+        # Valid, grayzone, idx_time==2 (batch, time) coordinates (shared across
+        # every alpha/centroid slice, so both alpha subframes align positionally).
+        tt = np.arange(timesteps)
+        remaining = lengths[:, None] - tt[None, :]
+        valid = (
+            (tt[None, :] < lengths[:, None])
+            & idx_time2[:, None]
+            & (remaining < len_gray)
+        )
+        batch_idx, time_idx = np.where(valid)
+
+        blocks = []
+        for centroid_idx, target_hz in dict_ints_name.items():
+            for alpha_idx in alpha_idxs:
+                g_slice = gates[alpha_idx, centroid_idx]  # (batch, time, gate_width)
+                data = {"batch": batch_idx, "timestep": time_idx}
+                for gi, gate in enumerate(gate_order):
+                    block = g_slice[batch_idx, time_idx, gi * num_units : (gi + 1) * num_units]
+                    for u in range(num_units):
+                        data[f"{gate.upper()}{u}"] = block[:, u]
+                df = pd.DataFrame(data)
+                df["color_entered"] = array_color[color_entered_idx[batch_idx]]
+                df["Hazard Rate"] = hazard[batch_idx]
+                df["timesteps_remaining"] = lengths[batch_idx] - time_idx
+                df["alpha"] = alpha_idx / 10
+                df["target_hz"] = target_hz
+                blocks.append(df)
+        df_ints = pd.concat(blocks, ignore_index=True)
+        del gates
+
+        # Signed delta toward the target hazard rate (DS6.4 :653-674).
+        list_dfs = []
+        for (hz, target_hz), df_hz in df_ints.groupby(["Hazard Rate", "target_hz"]):
+            if hz == target_hz:
+                continue
+            subs = [d for _, d in df_hz.groupby("alpha")]  # ascending: alpha0, alpha1
+            df_a0, df_a1 = subs[0], subs[1]
+            assert (
+                df_a0[["batch", "timestep"]].to_numpy()
+                == df_a1[["batch", "timestep"]].to_numpy()
+            ).all(), "alpha subframes misaligned"
+            df_delta = df_a0.copy().drop("alpha", axis=1)
+            if hz == "Low" and target_hz == "High":
+                df_delta[columns_gates] = (
+                    df_a1[columns_gates].to_numpy() - df_a0[columns_gates].to_numpy()
+                )
+            elif hz == "High" and target_hz == "Low":
+                df_delta[columns_gates] = (
+                    df_a0[columns_gates].to_numpy() - df_a1[columns_gates].to_numpy()
+                )
+            else:  # pragma: no cover - guarded above
+                raise ValueError("Invalid combination")
+            list_dfs.append(df_delta)
+        df_delta_ints = pd.concat(list_dfs)
+
+        # Per-colour mean over units → one row per (colour, unit) (DS6.4 :679-694).
+        mean_df = df_delta_ints.groupby("color_entered")[columns_gates].mean()
+        gate_dfs = []
+        for gate, cols in dict_column_gates.items():
+            gate_data = (
+                mean_df[cols]
+                .melt(var_name="unit", value_name=gate, ignore_index=False)
+                .reset_index()
+            )
+            gate_data["unit_idx"] = gate_data["unit"].str.extract(r"(\d+)").astype(int)
+            gate_data = gate_data.drop("unit", axis=1)
+            gate_dfs.append(gate_data)
+        plot_df = gate_dfs[0]
+        for gate_data in gate_dfs[1:]:
+            plot_df = pd.merge(plot_df, gate_data, on=["color_entered", "unit_idx"])
+        plot_df["model"] = exp_id
+        per_model.append(plot_df)
+
+    return pd.concat(per_model).reset_index(drop=True)
