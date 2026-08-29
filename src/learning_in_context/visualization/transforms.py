@@ -51,6 +51,7 @@ from scipy import stats
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 _DEFAULT_CACHE_DIR = _REPO_ROOT / "data" / "cache" / "fig_transforms"
 _MODEL_STATES_ROOT = _REPO_ROOT / "data" / "cache" / "model_states"
+_INTERVENTIONS_ROOT = _REPO_ROOT / "data" / "cache" / "interventions"
 
 
 # --------------------------------------------------------------------------- #
@@ -572,3 +573,126 @@ def activity_change_profile(
     )
     df.columns = ["_".join(col.split(".")) for col in df.columns]
     return df
+
+
+# --------------------------------------------------------------------------- #
+# Intervention prediction frames (SPEC rule 8 known-shared-from-day-one)
+# --------------------------------------------------------------------------- #
+# The per-model, per-alpha intervention prediction frames feed fig6's
+# intervention time-courses and summary point plots, and are reused by fig7's
+# gate panels (SPEC rule 8: "the per-model intervention frames — DS6.2 + DS6.4
+# both build them from interventions/"). Ported verbatim from
+# ``hmdcpd-analysis/notebooks/DS4-Interventions.py`` — ``window_samples``
+# (``:241``) and ``process_model_predictions_1`` (``:636``) — split into this
+# memoized per-model transform so figure scripts only pay the load/window cost
+# once. Keyed on ids/params only (SPEC rule 8); the ``.npz`` preds array and
+# trial metadata are loaded internally, never passed in.
+
+
+def _interventions_meta() -> pd.DataFrame:
+    """Trial metadata shared across every intervention model (DS4 ``df_data``)."""
+    return pd.read_csv(_INTERVENTIONS_ROOT / "trial_meta.csv", index_col=0)
+
+
+def _intervention_npz_name(stat: str, unit: str | None, num_alphas: int) -> str:
+    """Reconstruct DS4's ``process_model_predictions_1`` npz filename.
+
+    ``{stat}[-{unit}]-centroid-interventions-{num_alphas}-alphas.npz`` where
+    ``stat`` is ``"hz"`` / ``"cont"`` and ``unit`` is ``"hidden"`` / ``"cell"``
+    (or ``None`` for the both-units frame).
+    """
+    parts = [stat]
+    if unit is not None:
+        parts.append(unit)
+    parts += ["centroid-interventions", str(num_alphas), "alphas.npz"]
+    return "-".join(parts)
+
+
+def _window_samples(samples: np.ndarray, endpoints: np.ndarray, N: int) -> np.ndarray:
+    """Take the last ``N`` timesteps before each trial's endpoint.
+
+    Ported verbatim from DS4 ``window_samples`` (``:241``).
+    """
+    b, T, f = samples.shape
+    t_idx = endpoints[:, None] + np.arange(-N, 0)
+    b_idx = np.arange(b)[:, None]
+    return samples[b_idx, t_idx, :]
+
+
+@MEMORY.cache
+def intervention_prediction_frame(
+    model_name: str,
+    exp_id: str,
+    stat: str,
+    unit: str | None,
+    num_alphas: int = 11,
+    N: int = 26,
+) -> pd.DataFrame:
+    """Tidy per-model intervention prediction frame (fig6/fig7, memoized).
+
+    Loads one model's centroid-intervention predictions
+    (``interventions/{model_name}/{exp_id}/{stat}[-{unit}]-...alphas.npz``),
+    windows the last ``N`` timesteps before each trial endpoint, extracts the
+    probability of the entered colour per (alpha, video, timestep, centroid),
+    and returns the melted long frame DS4's plotting cells consume.
+
+    Args:
+        model_name: sub-directory under ``interventions/`` (e.g. ``"lstm"``).
+        exp_id: model id (e.g. ``"san-4604"``).
+        stat: ``"hz"`` (hazard-rate) or ``"cont"`` (contingency).
+        unit: ``"hidden"`` / ``"cell"`` (single-unit intervention) or ``None``
+            (both-units intervention).
+        num_alphas: number of intervention strengths (DS4 default 11 → 0.0-1.0).
+        N: timesteps to window (DS4: 26 for hazard, 24 for contingency).
+
+    Returns:
+        Long DataFrame with columns
+        ``[Alpha, Video, Hazard Rate, idx_time, Contingency, trial, Timestep,
+        Value, Centroid]``. ``Value`` is P(entered colour changes) = ``1 - p``.
+    """
+    df_data = _interventions_meta()
+    alphas = np.linspace(0, 1, num_alphas)
+    name = _intervention_npz_name(stat, unit, num_alphas)
+    path = _INTERVENTIONS_ROOT / model_name / exp_id / name
+    preds = np.load(str(path))["preds"]
+
+    color_entered = df_data["color_entered"].values - 1
+    lengths = df_data["length"].values
+
+    preds_list = []
+    for centroid_idx in range(2):
+        centroid_preds = preds[:, centroid_idx]
+        windowed_preds = [
+            _window_samples(centroid_preds[alpha_idx], lengths, N)
+            for alpha_idx in range(num_alphas)
+        ]
+        preds_list.append(np.stack(windowed_preds))
+    preds_int = np.stack(preds_list)
+    _, _, num_videos, timesteps, _num_channels = preds_int.shape
+
+    frames = []
+    for i, preds_norm in enumerate(preds_int):
+        pred_same_color = preds_norm[
+            np.arange(num_alphas)[:, None, None],
+            np.arange(num_videos)[None, :, None],
+            np.arange(timesteps)[None, None, :],
+            color_entered[None, :, None],
+        ]
+        pred_same_color_reshaped = pred_same_color.reshape(-1, timesteps)
+        df_preds = pd.DataFrame(pred_same_color_reshaped)
+        df_preds["Alpha"] = np.repeat(alphas, num_videos)
+        df_preds["Video"] = list(range(num_videos)) * num_alphas
+        df_preds["Hazard Rate"] = list(df_data["Hazard Rate"].values) * num_alphas
+        df_preds["idx_time"] = list(df_data["idx_time"].values) * num_alphas
+        df_preds["Contingency"] = list(df_data["Contingency"].values) * num_alphas
+        df_preds["trial"] = list(df_data["trial"].values) * num_alphas
+        melted = df_preds.melt(
+            id_vars=["Alpha", "Video", "Hazard Rate", "idx_time", "Contingency", "trial"],
+            var_name="Timestep",
+            value_name="Value",
+        )
+        melted["Value"] = 1 - melted["Value"]
+        melted["Centroid"] = i
+        frames.append(melted)
+
+    return pd.concat(frames, ignore_index=True)
