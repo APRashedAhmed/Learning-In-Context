@@ -51,6 +51,7 @@ dev = [
     "pre-commit",
     "ipython",
     "ipdb",
+    "marimo>=0.23.16,<0.24",
 ]
 
 [project.urls]
@@ -59,11 +60,15 @@ Homepage = "https://github.com/APRashedAhmed/Learning-In-Context/"
 [tool.hatch.build.targets.wheel]
 packages = ["src/learning_in_context"]
 
-[tool.uv]
-extra-index-url = ["https://download.pytorch.org/whl/cu128"]
+[[tool.uv.index]]
+name = "pytorch-cu128"
+url = "https://download.pytorch.org/whl/cu128"
+explicit = true
 
 [tool.uv.sources]
 bouncing-ball-task = { path = "../Bouncing-Ball-Task", editable = true }
+torch = { index = "pytorch-cu128" }
+torchvision = { index = "pytorch-cu128" }
 
 [tool.ruff]
 line-length = 100
