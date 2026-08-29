@@ -378,6 +378,139 @@ def ordered_change_windows(
 
 
 @MEMORY.cache
+def elasticnet_coefficient_paths(
+    dataset: str,
+    model_name: str,
+    exp_id: str,
+    stat: str,
+    n_alphas: int = 50,
+    logspace_hi: float = 0.0,
+    logspace_lo: float = -6.0,
+    M: int = 250,
+    timestep_from_end: int = 50,
+    l1_ratio_binary: float = 0.64,
+    l1_ratio_linear: float = 0.4,
+    max_iter_binary: int = 250,
+    max_iter_linear: int = 1000,
+) -> dict:
+    """ElasticNet regularization-path fit for one decoder (fig4, memoized).
+
+    Ports the fig4 data/fit pipeline from
+    ``hmdcpd-analysis/notebooks/DS2-Identifying-Critical-Units.py`` (the
+    ``linear_regularization_pipeline`` cell ``:523`` and its decoder/target
+    definitions). This is fig4's SPEC-rule-4 *tolerated* inline compute — the
+    ElasticNet fits run here rather than in a ``dodo.py`` task — so it is
+    memoized through the shared :data:`MEMORY` and keyed only on
+    paths/ids/params (SPEC rule 8); the state array and target labels are loaded
+    internally, never passed in.
+
+    The decoder input ``X`` is the DS2 recipe: z-score the concatenation of the
+    first ``M`` hidden and cell states over the (trial, time) axes, then take the
+    single timestep ``timestep_from_end`` steps from the end — a
+    ``(n_trials, 2 * hidden_size)`` feature matrix (32 columns: 16 hidden + 16
+    cell). One coefficient per column gives the heatmap's 32 rows.
+
+    Args:
+        stat: ``"hz"`` (binary hazard-rate decode via elastic-net logistic
+            regression → scalar F1) or ``"cont_r"`` (3-class contingency decode
+            cast as elastic-net regression → per-label F1 vector, ``average=None``).
+        n_alphas: number of points on the ``C``/alpha sweep.
+        logspace_hi / logspace_lo: ``np.logspace`` exponents (DS2: ``0`` → ``-6``,
+            i.e. ``C`` from ``1`` down to ``1e-6``).
+
+    Returns:
+        A dict with:
+          * ``coefs``: ``(n_units, n_alphas)`` array of per-alpha coefficients,
+          * ``intercepts``: list of per-alpha intercept arrays,
+          * ``metrics``: ``{"accuracy": (n_alphas,), "f1": (n_alphas,) or
+            (n_alphas, n_labels)}`` — hz f1 is scalar-per-alpha, cont_r f1 is
+            per-label (matches the deck's ``F1`` vs. ``F1 - Label 0/1/2``),
+          * ``C_logspace``: the sweep values (x-axis, plotted as "ElasticNet Alpha").
+    """
+    from sklearn.linear_model import ElasticNet, LogisticRegression
+    from sklearn.metrics import accuracy_score, f1_score
+
+    # --- decoder input X (DS2 recipe) --------------------------------------- #
+    path = _dataset_dir(dataset) / model_name / f"{exp_id}.npz"
+    model_data = np.load(str(path), allow_pickle=True)
+    z = stats.zscore(
+        np.concatenate(
+            [model_data["hiddens"][:, :M], model_data["cells"][:, :M]], axis=-1
+        ),
+        axis=(0, 1),
+        ddof=1,
+    )
+    X = z[:, -timestep_from_end]  # (n_trials, 2 * hidden_size)
+
+    # --- decoder target y --------------------------------------------------- #
+    df_data = pd.read_csv(_dataset_dir(dataset) / "trial_meta.csv", index_col=0)
+    if stat == "hz":
+        y = df_data["Hazard Rate"].eq("High").astype(int).values
+    elif stat == "cont_r":
+        y = df_data["Contingency"].map({"Low": 0, "Medium": 1, "High": 2}).values
+    else:  # pragma: no cover - guarded by caller
+        raise ValueError(f"unknown stat {stat!r}")
+
+    C_logspace = np.logspace(logspace_hi, logspace_lo, n_alphas)
+
+    coefs: list = []
+    intercepts: list = []
+    acc_path: list = []
+    f1_path: list = []
+
+    if stat == "cont_r":
+        # reg_linear (DS2:431): cast the 0/1/2 labels to [0, .5, 1], fit
+        # ElasticNet, predict the nearest label. alpha is DS2's C→alpha map.
+        y_choices = np.unique(y)
+        y_reg = (y_choices - y_choices.min()) / (y_choices.max() - y_choices.min())
+        y_scaled = (y - y_choices.min()) / (y_choices.max() - y_choices.min())
+        for C in C_logspace:
+            # DS2's C->alpha map hits exactly 0 at C == 1 (the no-regularization
+            # endpoint). Under the DS2-era sklearn that behaved as OLS; sklearn
+            # 1.8's ElasticNet(alpha=0) instead collapses to a constant fit
+            # (the "coordinate descent with no regularization" path), corrupting
+            # the leftmost alpha of the contingency panels. Floor alpha to a
+            # tiny positive value to reproduce the intended near-OLS behavior.
+            alpha_val = max(-(1 - 1 / C) / 100000, 1e-9)
+            reg = ElasticNet(
+                l1_ratio=l1_ratio_linear,
+                max_iter=max_iter_linear,
+                alpha=alpha_val,
+            ).fit(X, y_scaled)
+            pred = np.argmin(
+                np.abs(reg.predict(X).reshape((-1, 1)) - y_reg), axis=-1
+            )
+            coefs.append(reg.coef_.ravel())
+            intercepts.append(np.reshape(reg.intercept_, (1,)))
+            acc_path.append(accuracy_score(y, pred))
+            f1_path.append(f1_score(y, pred, average=None))
+    else:  # "hz" — reg_single (DS2:384): binary elastic-net logistic decode.
+        for C in C_logspace:
+            reg = LogisticRegression(
+                solver="saga",
+                penalty="elasticnet",
+                l1_ratio=l1_ratio_binary,
+                max_iter=max_iter_binary,
+                C=C,
+            ).fit(X, y)
+            pred = reg.predict(X)
+            coefs.append(reg.coef_.ravel())
+            intercepts.append(reg.intercept_)
+            acc_path.append(accuracy_score(y, pred))
+            f1_path.append(f1_score(y, pred))  # binary → scalar
+
+    return {
+        "coefs": np.stack(coefs, axis=-1),  # (n_units, n_alphas)
+        "intercepts": intercepts,
+        "metrics": {
+            "accuracy": np.array(acc_path),
+            "f1": np.array(f1_path),
+        },
+        "C_logspace": C_logspace,
+    }
+
+
+@MEMORY.cache
 def activity_change_profile(
     dataset: str,
     model_name: str,
