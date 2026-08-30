@@ -75,13 +75,16 @@ def get_memory(cache_dir: str | Path | None = None) -> joblib.Memory:
 MEMORY = get_memory()
 
 # Manual-recompute knob (SPEC rule 8): FORCE_RECOMPUTE reflects the env var at
-# import time; figure scripts may consult it to clear before a run.
+# import time. When set, the shared cache is cleared on import, so any run
+# started with ``LIC_FIG_FORCE_RECOMPUTE=1`` recomputes every transform.
 FORCE_RECOMPUTE = os.environ.get("LIC_FIG_FORCE_RECOMPUTE", "").strip().lower() in {
     "1",
     "true",
     "yes",
     "on",
 }
+if FORCE_RECOMPUTE:
+    MEMORY.clear(warn=False)
 
 
 def clear_cache(memory: joblib.Memory | None = None) -> None:

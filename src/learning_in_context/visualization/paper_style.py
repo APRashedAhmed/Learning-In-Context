@@ -24,10 +24,13 @@ PANEL_SQUARE = (3.0, 3.0)  # matches the DS/figure notebooks' default figsize
 PANEL_TUNING = (2.5, 3.0)  # matches figsize_tuning in the activity notebooks
 
 # --- Fonts ---
-# The paper decks use Arial. Vendoring Arial is an OPEN QUESTION (SPEC open
-# question 2: licensing); until ruled, register it only if present on the
-# system and fall back silently to the free metric-compatible Liberation Sans.
-FONT_FAMILY = ["Arial", "Liberation Sans", "sans-serif"]
+# SPEC operator ruling 2 (2026-08-28): the decks used Arial, but the shipped
+# figure font is Liberation Sans (metric-compatible, SIL-OFL — freely
+# redistributable), VENDORED in ``fonts/`` beside this module and registered
+# AHEAD of Arial so rendering never depends on system fonts. Illustrator
+# machines need Liberation Sans installed too.
+FONT_FAMILY = ["Liberation Sans", "Arial", "sans-serif"]
+_FONTS_DIR = Path(__file__).resolve().parent / "fonts"
 
 # --- Palette ---
 # Condition hues shared across figures (seaborn "deep" anchors).
@@ -41,20 +44,45 @@ SHORTENED_CONDITIONS = {
     "Contingency": "CT",
 }
 
+
+def get_color_palette(columns, color_number_tup, linspace_range=(0.5, 1), linspace_offset=1):
+    """Colormap-sampled palette dict (ported from hmdcpd.visualization).
+
+    Shared by the figure scripts (fig5/fig6/fig7 previously carried divergent
+    private copies). ``color_number_tup`` entries are ``(cmap_name, n)`` for
+    ``n`` evenly spaced samples, or ``(cmap_name, (n, j))`` for the single
+    ``j``-th of ``n`` samples.
+    """
+    import numpy as np
+
+    color_list = []
+    for _i, (color, number) in enumerate(color_number_tup):
+        cmap = sns.color_palette(color, as_cmap=True)
+        if isinstance(number, int):
+            num = number + linspace_offset
+        elif isinstance(number, tuple):
+            num = number[0] + linspace_offset
+        color_array = [cmap(x) for x in np.linspace(*linspace_range, num=num)]
+        if isinstance(number, int):
+            color_list += [color_array[_j] for _j in range(number)]
+        elif isinstance(number, tuple):
+            color_list += [color_array[number[1]]]
+    return {col: color for col, color in zip(columns, color_list)}
+
 # Repo root (this file lives at src/learning_in_context/visualization/).
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 PANELS_DIR = _REPO_ROOT / "outputs" / "panels"
 
 
 def _register_fonts() -> None:
-    """Register preferred fonts if present; silently keep fallbacks otherwise."""
-    for family in FONT_FAMILY[:-1]:
-        try:
-            font_manager.findfont(
-                family, fallback_to_default=False, rebuild_if_missing=False
-            )
-        except ValueError:
-            continue
+    """Register the vendored Liberation Sans faces (SPEC ruling 2).
+
+    ``font_manager.fontManager.addfont`` registers each vendored ``.ttf`` for
+    this process, so the primary family resolves identically on every machine
+    regardless of what fonts the system ships.
+    """
+    for ttf in sorted(_FONTS_DIR.glob("*.ttf")):
+        font_manager.fontManager.addfont(str(ttf))
 
 
 def apply_style() -> None:

@@ -89,23 +89,8 @@ def _(np, paper_style):
     # dependency DAG (so svg.fonttype='none' is set before any panel is saved).
     paper_style.apply_style()
 
-    def get_color_palette(columns, color_number_tup, linspace_range=(0.5, 1), linspace_offset=1):
-        # Ported verbatim from hmdcpd.visualization.get_color_palette.
-        import seaborn as _sns
-
-        color_list = []
-        for _i, (color, number) in enumerate(color_number_tup):
-            cmap = _sns.color_palette(color, as_cmap=True)
-            if isinstance(number, int):
-                num = number + linspace_offset
-            elif isinstance(number, tuple):
-                num = number[0] + linspace_offset
-            color_array = [cmap(x) for x in np.linspace(*linspace_range, num=num)]
-            if isinstance(number, int):
-                color_list += [color_array[_j] for _j in range(number)]
-            elif isinstance(number, tuple):
-                color_list += [color_array[number[1]]]
-        return {col: color for col, color in zip(columns, color_list)}
+    # Shared colormap-palette helper (promoted to paper_style; one copy).
+    get_color_palette = paper_style.get_color_palette
 
     # Pipeline pinned per DS4-Interventions.py.
     MODEL = "lstm"
@@ -224,11 +209,13 @@ def _(FuncFormatter, Line2D, math, np, paper_style, plt, sns, get_color_palette)
             ]
             sns.lineplot(
                 data=sub, x=x, y=y, hue=hue, palette=palette,
-                errorbar="ci", ax=ax, legend=(j == num_conds - 1),
+                errorbar="ci", seed=0,  # deterministic CI bands across re-runs
+                ax=ax, legend=(j == num_conds - 1),
             )
             sns.lineplot(
                 data=frame[(frame[stat] == ref_cond) & (frame[hue] == 0.0)],
-                x=x, y=y, color="red", errorbar="ci", ax=ax, legend=False, linewidth=2,
+                x=x, y=y, color="red", errorbar="ci", seed=0,
+                ax=ax, legend=False, linewidth=2,
             )
             if vline:
                 ax.axvline(x=vline, color="gray", linestyle="--", linewidth=2, alpha=0.7)
@@ -303,7 +290,10 @@ def _(FuncFormatter, Line2D, math, np, paper_style, plt, sns, get_color_palette)
         """
         sub = frame[frame["Timestep"] == final_timestep]
         fig = plt.figure(figsize=figsize)
-        ax = sns.pointplot(sub, x="Alpha", y="Value", hue="Type", palette=palette)
+        ax = sns.pointplot(
+            sub, x="Alpha", y="Value", hue="Type", palette=palette,
+            seed=0,  # deterministic CI whiskers across re-runs
+        )
         plt.xlabel("Alpha")
         plt.ylabel("P(Final Color Change)")
 

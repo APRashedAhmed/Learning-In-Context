@@ -78,21 +78,11 @@ def _(np, paper_style):
     # dependency DAG (so svg.fonttype='none' is set before any panel is saved).
     paper_style.apply_style()
 
-    def get_color_palette(columns, color_number_tup, linspace_range=(0.5, 1), linspace_offset=1):
-        # Ported from hmdcpd.visualization.get_color_palette.
-        color_list = []
-        for _i, (color, number) in enumerate(color_number_tup):
-            import seaborn as _sns
-
-            cmap = _sns.color_palette(color, as_cmap=True)
-            num = number + linspace_offset
-            color_array = [cmap(x) for x in np.linspace(*linspace_range, num=num)]
-            color_list += [color_array[_j] for _j in range(number)]
-        return {col: color for col, color in zip(columns, color_list)}
-
     def viridis_palette(prefix, n):
         labels = [f"{prefix} {i + 1}" for i in range(n)]
-        return get_color_palette(labels, (("viridis", n),), linspace_range=np.array((0.0, 1.1)))
+        return paper_style.get_color_palette(
+            labels, (("viridis", n),), linspace_range=np.array((0.0, 1.1))
+        )
 
     # Pinned per fig_hazard_rate_activity.py (dataset/model/exemplar model).
     DATASET = "extended_dataset"
@@ -268,7 +258,7 @@ def _(
                 change_labels=change_labels,
                 palette=palette,
                 change_idx=CHANGE_IDX,
-                stat_short="HZ",
+                stat_short=paper_style.SHORTENED_CONDITIONS["Hazard Rate"],
                 vline_label="Color Change",
                 T=T,
                 figsize=FIGSIZE_TC,
