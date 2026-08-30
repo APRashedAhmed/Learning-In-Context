@@ -1807,3 +1807,134 @@ def task_full_pipeline():
         'verbosity': 2,
         'doc': 'Alias for extract_and_analyze - runs complete extraction and analysis workflow'
     }
+
+
+# ============================================================================
+# PAPER FIGURE PANELS (figures/SPEC.md step 5)
+# ============================================================================
+
+FIGURES_SRC_DIR = PROJECT_ROOT / 'figures'
+PANELS_DIR = PROJECT_ROOT / 'outputs' / 'panels'
+PAPER_STYLE_FILE = PROJECT_ROOT / 'src' / 'learning_in_context' / 'visualization' / 'paper_style.py'
+FIG_TRANSFORMS_FILE = PROJECT_ROOT / 'src' / 'learning_in_context' / 'visualization' / 'transforms.py'
+
+# Representative, stable tier-1 artifacts each figure script reads (via
+# transforms.py). Pragmatic per SPEC step 5: a single stable file that
+# stands in for the underlying data directory, not a glob over every npz
+# (fig4/fig5 read data/cache/model_states/extended_dataset/*, fig6/fig7 read
+# data/cache/interventions/*) — consistent with how the rest of dodo.py
+# depends on specific files rather than directories.
+EXTENDED_DATASET_MARKER = CACHE_DIR / 'model_states' / 'extended_dataset' / 'trial_meta.csv'
+INTERVENTIONS_MARKER = CACHE_DIR / 'interventions' / 'trial_meta.csv'
+
+# name -> (targets relative to outputs/panels/fig<N>/, tier-1 artifact deps)
+PANEL_TASKS = {
+    'fig4': {
+        'script': FIGURES_SRC_DIR / 'fig4_identifying_units.py',
+        'targets': [
+            'score_curves_hazard_rate.svg',
+            'coef_heatmap_hazard_rate.svg',
+            'score_curves_contingency.svg',
+            'coef_heatmap_contingency.svg',
+        ],
+        'artifact_deps': [EXTENDED_DATASET_MARKER],
+    },
+    'fig5': {
+        'script': FIGURES_SRC_DIR / 'fig5_unit_activity.py',
+        'targets': [
+            'activity_timecourse_hazard_rate_hidden.svg',
+            'activity_profile_hazard_rate_hidden.svg',
+            'activity_timecourse_hazard_rate_cell.svg',
+            'activity_profile_hazard_rate_cell.svg',
+            'activity_timecourse_contingency_hidden.svg',
+            'activity_profile_contingency_hidden.svg',
+            'activity_timecourse_contingency_cell.svg',
+            'activity_profile_contingency_cell.svg',
+            'activity_timecourse_contingency_no_change_hidden.svg',
+            'activity_profile_contingency_no_change_hidden.svg',
+            'activity_timecourse_contingency_no_change_cell.svg',
+            'activity_profile_contingency_no_change_cell.svg',
+        ],
+        'artifact_deps': [EXTENDED_DATASET_MARKER],
+    },
+    'fig6': {
+        'script': FIGURES_SRC_DIR / 'fig6_interventions.py',
+        'targets': [
+            'intervention_timecourse_hz_hidden.svg',
+            'summary_pointplot_hz_hidden.svg',
+            'intervention_timecourse_hz_cell.svg',
+            'summary_pointplot_hz_cell.svg',
+            'intervention_timecourse_ct_hidden.svg',
+            'summary_pointplot_ct_hidden.svg',
+            'intervention_timecourse_ct_cell.svg',
+            'summary_pointplot_ct_cell.svg',
+        ],
+        'artifact_deps': [INTERVENTIONS_MARKER],
+    },
+    'fig7': {
+        'script': FIGURES_SRC_DIR / 'fig7_gates.py',
+        'targets': [
+            'cell_unit_interventions_all_models.svg',
+            'gate_rescue_input_forget.svg',
+            'gate_scatter_delta_forget_input.svg',
+            'gate_scatter_delta_forget_input_unit_mean.svg',
+        ],
+        'artifact_deps': [INTERVENTIONS_MARKER],
+    },
+}
+
+
+def _panel_deps_not_newer_than_targets(dep_paths, target_paths):
+    """`uptodate` functor: Make-style mtime check on top of doit's default.
+
+    doit's default MD5Checker treats a bare ``touch`` (mtime bump, no content
+    change) as unmodified, so a `touch paper_style.py` alone would not mark
+    dependent panel sub-tasks stale. This closure adds a plain mtime
+    comparison (any dep newer than any target => stale) so touching a shared
+    module such as ``paper_style.py`` reliably marks all panel sub-tasks
+    stale, without changing the global checker used by the rest of dodo.py.
+    """
+    def check(task=None, values=None):
+        try:
+            dep_mtimes = [os.path.getmtime(d) for d in dep_paths]
+            target_mtimes = [os.path.getmtime(t) for t in target_paths]
+        except OSError:
+            return False
+        if not target_mtimes:
+            return False
+        return max(dep_mtimes) <= min(target_mtimes)
+    return check
+
+
+def task_panels():
+    """Regenerate paper figure panels (figures/SPEC.md step 5).
+
+    One sub-task per figure script (``panels:fig4`` … ``panels:fig7``). Each
+    sub-task runs its marimo script headlessly with the current interpreter
+    and depends on the script itself, the shared style/transform modules, and
+    a representative tier-1 artifact so `doit` reruns it when the upstream
+    data, style, or transforms change.
+
+    EXAMPLES:
+        doit panels          # regenerate every figure's panels
+        doit panels:fig4      # regenerate just fig4's panels
+        doit list --status    # check staleness without running
+    """
+    for fig_name, spec in PANEL_TASKS.items():
+        script = spec['script']
+        out_dir = PANELS_DIR / fig_name
+        targets = [str(out_dir / name) for name in spec['targets']]
+        file_dep = [str(script), str(PAPER_STYLE_FILE), str(FIG_TRANSFORMS_FILE)] + [
+            str(p) for p in spec['artifact_deps']
+        ]
+
+        yield {
+            'name': fig_name,
+            'actions': [f'{PYTHON} {script}'],
+            'file_dep': file_dep,
+            'targets': targets,
+            'uptodate': [_panel_deps_not_newer_than_targets(file_dep, targets)],
+            'clean': True,
+            'verbosity': 2,
+            'doc': f'Regenerate {fig_name} panels via {script.name}',
+        }
