@@ -1857,6 +1857,22 @@ PANEL_TASKS = {
             PARTICIPANT_IBO_MARKER,
         ],
     },
+    'fig3': {
+        'script': FIGURES_SRC_DIR / 'fig3_task_results.py',
+        'targets': [
+            'cwc_straight_participants.svg',
+            'cwc_straight_rnn.svg',
+            'cwc_straight_lstm.svg',
+            'cwc_bounce_participants.svg',
+            'cwc_bounce_rnn.svg',
+            'cwc_bounce_lstm.svg',
+        ],
+        'artifact_deps': [
+            PARTICIPANT_DATASET_MARKER,
+            CACHE_DIR / 'participants' / 'participant_cwc.parquet',
+            CACHE_DIR / 'participants' / 'participant_counts.json',
+        ],
+    },
     'fig4': {
         'script': FIGURES_SRC_DIR / 'fig4_identifying_units.py',
         'targets': [

@@ -16,7 +16,7 @@ from .conftest import run_doit
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
-EXPECTED_SUBTASKS = ["fig2", "fig4", "fig5", "fig6", "fig7"]
+EXPECTED_SUBTASKS = ["fig2", "fig3", "fig4", "fig5", "fig6", "fig7"]
 
 EXPECTED_TARGETS = {
     "fig2": [
@@ -24,6 +24,14 @@ EXPECTED_TARGETS = {
         "estimate_curve_contingency.svg",
         "cwc_hazard_rate.svg",
         "cwc_contingency.svg",
+    ],
+    "fig3": [
+        "cwc_straight_participants.svg",
+        "cwc_straight_rnn.svg",
+        "cwc_straight_lstm.svg",
+        "cwc_bounce_participants.svg",
+        "cwc_bounce_rnn.svg",
+        "cwc_bounce_lstm.svg",
     ],
     "fig4": [
         "score_curves_hazard_rate.svg",
