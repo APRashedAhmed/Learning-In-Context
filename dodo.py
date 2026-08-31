@@ -1938,3 +1938,68 @@ def task_panels():
             'verbosity': 2,
             'doc': f'Regenerate {fig_name} panels via {script.name}',
         }
+
+# ============================================================================
+# PARTICIPANT BEHAVIORAL DATA
+# ============================================================================
+
+PARTICIPANTS_DIR = CACHE_DIR / 'participants'
+PARTICIPANT_RAW_DIR = DATA_DIR / 'raw' / f'hbb_{PARTICIPANT_VERSION}'
+PARTICIPANT_DATASET_DIR = CACHE_DIR / 'model_states' / 'participant_dataset'
+PARTICIPANTS_MODULE = (
+    PROJECT_ROOT / 'src' / 'learning_in_context' / 'analysis' / 'participants.py'
+)
+
+# Artifacts written by the participant pipeline, in the order it writes them.
+PARTICIPANT_STATS_TARGETS = (
+    'participant_stats_filtered.parquet',
+    'participant_cwc.parquet',
+    'participant_counts.json',
+)
+
+
+def task_participant_stats():
+    """Load, filter and score the human bouncing-ball task responses.
+
+    Reads every participant's raw jsPsych export, applies the cohort exclusion
+    filters, and scores the surviving participants' responses as
+    confidence-weighted choices.
+
+    INPUTS:
+        - Participant exports: data/raw/hbb_<version>/hbb_participant_responses_<version>/
+        - Demographics: data/raw/hbb_<version>/hbb_demographics_<version>.csv
+        - Trial metadata: data/cache/model_states/participant_dataset/trial_meta.csv
+
+    OUTPUTS:
+        - data/cache/participants/participant_stats_filtered.parquet
+        - data/cache/participants/participant_cwc.parquet
+        - data/cache/participants/participant_counts.json
+
+    EXAMPLES:
+        doit participant_stats                      # build the participant artifacts
+        doit participant_stats participants=v3_2_2  # pick the task version
+    """
+    # The participant-id listing stands in for the export directory, which
+    # doit cannot depend on directly.
+    file_dep = [
+        PARTICIPANT_RAW_DIR / f'hbb_participant_ids_{PARTICIPANT_VERSION}.txt',
+        PARTICIPANT_RAW_DIR / f'hbb_demographics_{PARTICIPANT_VERSION}.csv',
+        PARTICIPANT_DATASET_DIR / 'trial_meta.csv',
+        PARTICIPANTS_MODULE,
+    ]
+
+    cmd_parts = [
+        f'{PYTHON} -m learning_in_context.analysis.participants',
+        f'--output-dir {PARTICIPANTS_DIR}',
+        f'--raw-dir {PARTICIPANT_RAW_DIR}',
+        f'--participant-dataset-dir {PARTICIPANT_DATASET_DIR}',
+    ]
+
+    return {
+        'actions': [' '.join(cmd_parts)],
+        'file_dep': [str(path) for path in file_dep],
+        'targets': [str(PARTICIPANTS_DIR / name) for name in PARTICIPANT_STATS_TARGETS],
+        'clean': True,
+        'verbosity': 2,
+        'doc': 'Build the filtered participant statistics, CWC table and cohort counts',
+    }

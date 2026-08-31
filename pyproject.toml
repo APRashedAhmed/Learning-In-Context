@@ -41,6 +41,7 @@ dependencies = [
     "watermark",
     "typer",
     "bouncing-ball-task",
+    "pyarrow",
 ]
 
 [project.optional-dependencies]
