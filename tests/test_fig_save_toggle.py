@@ -21,7 +21,11 @@ script must satisfy three properties:
    loop. A call that merely re-invokes a private throwaway closure (the
    ``def _(): ...; _()`` idiom used today, which discards its return value and
    therefore displays nothing) does not satisfy this — nor does ending on the
-   ``save_panel`` call itself.
+   ``save_panel`` call itself, nor on an inert literal.
+4. The switch is wired up the way marimo's file format demands: the cell that
+   assigns ``save_svgs`` also returns it, and every *other* cell that reads
+   ``save_svgs`` declares it as a parameter. Without both halves the notebook
+   raises ``NameError`` at cell-run time even though contracts 1-3 hold.
 
 These are pure ``ast`` checks over the script source: no marimo runtime, no
 figure rendering, no data access. They are written before the feature lands
@@ -86,10 +90,13 @@ def _find_save_svgs_switch(tree: ast.Module) -> ast.Assign | None:
             continue
         if not (isinstance(call.func, ast.Attribute) and call.func.attr == "switch"):
             continue
-        # call.func should resolve to `mo.ui.switch` (an Attribute chain
-        # ending in `.ui.switch` off a `mo` name).
+        # call.func must resolve to `mo.ui.switch` exactly — an Attribute chain
+        # `switch` <- `ui` <- the `mo` Name, so an unrelated `foo.ui.switch(...)`
+        # does not satisfy the contract.
         inner = call.func.value
         if not (isinstance(inner, ast.Attribute) and inner.attr == "ui"):
+            continue
+        if not (isinstance(inner.value, ast.Name) and inner.value.id == "mo"):
             continue
         has_true_value_kw = any(
             kw.arg == "value" and isinstance(kw.value, ast.Constant) and kw.value.value is True
@@ -101,12 +108,21 @@ def _find_save_svgs_switch(tree: ast.Module) -> ast.Assign | None:
 
 
 def _has_matching_if_ancestor(node: ast.AST, parents: dict[ast.AST, ast.AST]) -> bool:
-    """Walk up from `node` looking for an enclosing `if save_svgs.value:` block."""
-    current = parents.get(node)
+    """Walk up from `node` looking for an enclosing `if save_svgs.value:` block.
+
+    Only the `if`'s *body* counts: a call reached through the `orelse` branch
+    runs precisely when the switch is off, so `else:`/`elif` placement (marked
+    by `orelse` in the AST) is not gating and must not pass.
+    """
+    child, current = node, parents.get(node)
     while current is not None:
-        if isinstance(current, ast.If) and _is_save_svgs_value_test(current.test):
+        if (
+            isinstance(current, ast.If)
+            and _is_save_svgs_value_test(current.test)
+            and any(stmt is child for stmt in current.body)
+        ):
             return True
-        current = parents.get(current)
+        child, current = current, parents.get(current)
     return False
 
 
@@ -140,20 +156,32 @@ def _last_non_return_statement(func: ast.FunctionDef) -> ast.stmt | None:
 
 
 def _is_display_expression(stmt: ast.stmt) -> bool:
-    """A bare `ast.Expr` that plausibly displays a figure or `mo.vstack([...])`.
+    """A bare `ast.Expr` that actually surfaces a figure as the cell's output.
 
-    Explicitly rejects the `save_panel(...)` call itself and the throwaway
-    `_()` closure-invocation idiom used by the pre-feature scripts, since
-    neither actually surfaces a figure to marimo's cell output.
+    Accepted: a reference to an already-built figure — a name (`_fig`), an
+    attribute or subscript (`_figs[0]`), or a tuple/list of those — or a call on
+    `mo` such as `mo.vstack([...])` for cells rendering several panels.
+
+    Rejected: the `save_panel(...)` call itself (returns a `Path`), the
+    throwaway `def _(): ...; _()` closure-invocation idiom used by the
+    pre-feature scripts (discards its return value), and inert literals such as
+    a bare string or `None`, none of which display a figure.
     """
     if not isinstance(stmt, ast.Expr):
         return False
     value = stmt.value
-    if _is_save_panel_call(value):
-        return False
-    if isinstance(value, ast.Call) and isinstance(value.func, ast.Name) and value.func.id == "_":
-        return False
-    return True
+    if isinstance(value, (ast.Name, ast.Attribute, ast.Subscript, ast.Tuple, ast.List)):
+        return True
+    # `mo.vstack([...])` / `mo.hstack([...])` and friends: a call whose receiver
+    # chain bottoms out at the `mo` name.
+    if isinstance(value, ast.Call) and isinstance(value.func, ast.Attribute):
+        if _is_save_panel_call(value):
+            return False
+        root = value.func
+        while isinstance(root, ast.Attribute):
+            root = root.value
+        return isinstance(root, ast.Name) and root.id == "mo"
+    return False
 
 
 @pytest.mark.parametrize("script_path", FIGURE_SCRIPTS, ids=lambda p: p.stem)
@@ -186,6 +214,77 @@ class TestSavePanelGatingContract:
             f"{script_path.name}: {len(ungated)} save_panel call(s) (of {len(calls)}) "
             f"at line(s) {[c.lineno for c in ungated]} are not lexically inside an "
             "`if save_svgs.value:` block."
+        )
+
+
+def _cell_parameter_names(func: ast.FunctionDef) -> set[str]:
+    args = func.args
+    return {a.arg for a in (*args.posonlyargs, *args.args, *args.kwonlyargs)}
+
+
+def _assigns_name(func: ast.FunctionDef, name: str) -> bool:
+    return any(
+        isinstance(node, ast.Assign)
+        and any(isinstance(t, ast.Name) and t.id == name for t in node.targets)
+        for node in ast.walk(func)
+    )
+
+
+def _returned_names(func: ast.FunctionDef) -> set[str]:
+    names: set[str] = set()
+    for stmt in func.body:
+        if isinstance(stmt, ast.Return) and stmt.value is not None:
+            names |= {
+                node.id for node in ast.walk(stmt.value) if isinstance(node, ast.Name)
+            }
+    return names
+
+
+def _reads_name(func: ast.FunctionDef, name: str) -> bool:
+    return any(
+        isinstance(node, ast.Name) and node.id == name and isinstance(node.ctx, ast.Load)
+        for node in ast.walk(func)
+    )
+
+
+@pytest.mark.parametrize("script_path", FIGURE_SCRIPTS, ids=lambda p: p.stem)
+class TestSwitchCellWiringContract:
+    """Contract 4: `save_svgs` is wired per marimo's file format.
+
+    marimo cells are plain functions: a cell's globals arrive as parameters and
+    its definitions leave via the trailing `return`. A switch that is defined
+    but not returned, or read by a cell that does not declare it, raises
+    `NameError` when that cell runs — a failure the other three contracts, which
+    only look at lexical structure, cannot see.
+    """
+
+    def test_defining_cell_returns_the_switch(self, script_path: Path):
+        tree = _parse(script_path)
+        definers = [
+            fn for fn in _find_marimo_cell_functions(tree) if _assigns_name(fn, "save_svgs")
+        ]
+        assert definers, (
+            f"{script_path.name}: no marimo cell assigns `save_svgs`; the switch must "
+            "live in a cell so marimo can expose it to the render cells."
+        )
+        offenders = [fn.lineno for fn in definers if "save_svgs" not in _returned_names(fn)]
+        assert not offenders, (
+            f"{script_path.name}: the cell(s) at line(s) {offenders} assign `save_svgs` "
+            "but do not return it, so no other cell can read the switch."
+        )
+
+    def test_consuming_cells_declare_the_switch_parameter(self, script_path: Path):
+        tree = _parse(script_path)
+        offenders = [
+            fn.lineno
+            for fn in _find_marimo_cell_functions(tree)
+            if _reads_name(fn, "save_svgs")
+            and not _assigns_name(fn, "save_svgs")
+            and "save_svgs" not in _cell_parameter_names(fn)
+        ]
+        assert not offenders, (
+            f"{script_path.name}: the cell(s) at line(s) {offenders} read `save_svgs` "
+            "without declaring it as a cell parameter — they would raise NameError."
         )
 
 
