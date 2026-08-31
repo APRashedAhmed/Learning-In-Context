@@ -8,6 +8,16 @@ flips its cell to a loud XPASS, signalling the marker's removal.
 NB the current IdealCountingObserver crashes (`ValueError: max() arg is an empty
 sequence`) on any batch with ZERO grayzone frames (Tier-3, deferred), so every
 ICO-fed batch below carries at least one occluded frame in some row.
+
+OPEN (B1 builder fix): defect B1 in `tests/ideal_observer_builders.py` — a wall
+relocation that was itself a second-difference kink, so the models scored an
+undeclared extra bounce — is fixed. The fix removed a phantom bounce from
+`_AGREEMENT_SCRIPT` / `_EQUIV_SCRIPT` and, with it, the ICO/V2 agreement that
+cell #10 (C11) asserted. **C11 is currently UNCOVERED**: see
+`test_ico_v2_agreement` for the hand derivation of the new values and for the
+model-side off-by-one (ICO pairs `velocity_change[k]`, centred on position k+1,
+with the colour change arriving at position k+2) that the phantom had been
+masking. Both need a disposition from the model owner.
 """
 
 import pytest
@@ -82,6 +92,12 @@ _V2_VISIBLE_RANDOM_SCRIPT = [
 _K_CHANGES, _N_STEPS = 2, 6
 
 # #8-V2 dissociation: the ONLY colour change coincides with the only bounce.
+# Geometry after the B1 builder fix: x = [248, 252, 244, 236, 228] (frame 0 is
+# now itself rendered OOB, which the pre-fix builder silently dropped), so
+# velocity_change = [T, F, F] and positions_oob = [T, T, F, F, F]. V2 reads
+# positions only through _derive_bounce, whose bounce[:, 0] is forced False, so
+# bounce = [F, T, F, F, F] — bit-identical to the pre-fix batch. This cell is
+# INERT to the fix.
 _BOUNCE_ONLY_VISIBLE_SCRIPT = [
     Event(color=0, at_wall=True),
     Event(color=1, velocity_change=True, at_wall=True),
@@ -118,6 +134,12 @@ _T_CUT = 7
 
 # #10 agreement: a visible bounce-coincident colour change plus a grayzone with
 # a colour change across it (the grayzone also keeps ICO from crashing).
+# ONE velocity change is declared, at script index 2. After the B1 builder fix
+# the trajectory is x = [244, 248, 252, 244, 236, 228, 220], giving
+# velocity_change [F, T, F, F, F] and exactly ONE detected bounce; before the
+# fix the wall relocation added a phantom bounce at velocity index 0. See
+# test_builder_validation_agreement_script_single_bounce for the hand table and
+# test_ico_v2_agreement for what the extra bounce had been propping up.
 _AGREEMENT_SCRIPT = [
     Event(color=0),
     Event(color=0, at_wall=True),
@@ -148,6 +170,13 @@ class TestBuilderValidation:
     one occluded frame) purely so the ICO does not hit its no-grayzone ValueError
     (Tier-3); the hand table is asserted on row 0, and the detectors under test
     are position-derived, so the extra row cannot perturb them.
+
+    The first two cells feed LITERAL tensors, never the builder — they are the
+    detector's own anchor and must stay untouched by builder changes. The
+    builder-fed cells below assert EXACT boolean lists rather than `.any()`:
+    `.any()` cannot tell one declared bounce from two, which is exactly how
+    builder defect B1 (a wall relocation that was itself a second-difference
+    kink) survived undetected here.
     """
 
     def test_builder_validation_random_change(self):
@@ -216,7 +245,15 @@ class TestBuilderValidation:
         assert ico.velocity_change_random[0].tolist() == [False, False, False]
 
     def test_builder_validation_matches_declared_events(self):
-        # The builder, given the equivalent Event scripts, reproduces the hand tables.
+        # The builder, given the equivalent Event scripts, reproduces the hand
+        # tables. EXACT lists, not `.any()` (weakness W1): `.any()` could not
+        # distinguish one declared bounce from the two the pre-B1-fix builder
+        # actually produced, which is how defect B1 survived this cell.
+        #
+        # Builder constants: X_HOME = 244 (in bounds), X_WALL0 = 248 (OOB),
+        # STEP = 4, WALL_X = 246; OOB iff x > 246 or x < 10. Detector alignment:
+        # velocity_change[k] = (x[k+2]-x[k+1]) != (x[k+1]-x[k]), centred on
+        # position index k+1, and paired with positions_oob[:, 1:-1].
         random_script = [
             Event(color=1),
             Event(color=1),
@@ -224,6 +261,19 @@ class TestBuilderValidation:
             Event(color=1),
             Event(color=1),
         ]
+        # Hand-derived trajectory for random_script (no walls, vc at index 2):
+        #   t=0            -> x = X_HOME                      = 244
+        #   t=1 free       -> v = -4  (244-4 = 240 <= X_HOME) = 240
+        #   t=2 forced     -> v = -4                          = 236
+        #   t=3 free (vc)  -> -4 collides with v_prev, next rung -2
+        #                                                     = 234
+        #   t=4 forced     -> v = -2                          = 232
+        #   x        = [244, 240, 236, 234, 232]
+        #   seg      = [     -4,  -4,  -2,  -2]
+        #   2nd diff = [          0,  +2,   0]  -> nonzero at velocity index 1
+        #   oob      = [  F,   F,   F,   F,   F]
+        # => velocity_change [F, T, F]; index 1 <-> position index 2 <-> the
+        #    declared change at script index 2. No wall => random, not bounce.
         bounce_script = [
             Event(color=1, at_wall=True),
             Event(color=1, velocity_change=True, at_wall=True),
@@ -231,6 +281,22 @@ class TestBuilderValidation:
             Event(color=1),
             Event(color=1),
         ]
+        # Hand-derived trajectory for bounce_script (walls at 0 and 1, vc at 1):
+        #   t=0            -> frame 0 is a wall     -> x = X_WALL0 = 248 (OOB)
+        #   t=1 free, wall -> v = +4 (248+4 = 252 > 246)      = 252 (OOB)
+        #   t=2 free (vc), no wall -> smallest rung landing <= 244 is -8
+        #                                                     = 244
+        #   t=3 forced     -> v = -8                          = 236
+        #   t=4 forced     -> v = -8                          = 228
+        #   x        = [248, 252, 244, 236, 228]
+        #   seg      = [     +4,  -8,  -8,  -8]
+        #   2nd diff = [        -12,   0,   0]  -> nonzero at velocity index 0
+        #   oob      = [  T,   T,   F,   F,   F]
+        #   oob[1:-1]= [       T,   F,   F]
+        # => velocity_change [T, F, F]; bounce = oob[1:-1] & vc = [T, F, F].
+        # NB positions_oob[0] is now True: the pre-fix builder silently dropped
+        # a wall declared on frame 0 (x[0] was always mid-box). It is inert for
+        # V2 (bounce[:, 0] is forced False) but the builder no longer lies.
         # third row: event-free, one occluded frame (ICO no-grayzone guard only).
         grayzone_script = [
             Event(color=1),
@@ -239,16 +305,76 @@ class TestBuilderValidation:
             Event(color=1),
             Event(color=1),
         ]
+        # Hand-derived trajectory for grayzone_script (no events at all):
+        #   x        = [244, 240, 236, 232, 228]   (constant v = -4 throughout)
+        #   2nd diff = [          0,   0,   0]
+        #   oob      = [  F,   F,   F,   F,   F]
+        # => velocity_change [F, F, F]; no bounce, no random. Occlusion touches
+        #    only the colour channels, never the positions.
         samples = build_samples([random_script, bounce_script, grayzone_script])
         ico = IdealCountingObserver(prog_bar=False)
         ico(samples, return_means=True)
-        # row 0: random change; row 1: bounce — declared vs detected (1:-1 alignment).
-        assert ico.velocity_change_random[0].any() and not ico.velocity_change_bounce[0].any()
-        assert ico.velocity_change_bounce[1].any()
+
+        # row 0: one random change, no walls.
+        assert ico.velocity_change[0].tolist() == [False, True, False]
+        assert ico.positions_oob[0].tolist() == [False, False, False, False, False]
+        assert ico.velocity_change_bounce[0].tolist() == [False, False, False]
+        assert ico.velocity_change_random[0].tolist() == [False, True, False]
+
+        # row 1: one bounce, walls on frames 0 and 1.
+        assert ico.velocity_change[1].tolist() == [True, False, False]
+        assert ico.positions_oob[1].tolist() == [True, True, False, False, False]
+        assert ico.velocity_change_bounce[1].tolist() == [True, False, False]
+        assert ico.velocity_change_random[1].tolist() == [False, False, False]
+
+        # row 2: event-free; the occluded frame must not perturb the geometry.
+        assert ico.velocity_change[2].tolist() == [False, False, False]
+        assert ico.positions_oob[2].tolist() == [False, False, False, False, False]
+        assert ico.velocity_change_bounce[2].tolist() == [False, False, False]
+        assert ico.velocity_change_random[2].tolist() == [False, False, False]
+
+    def test_builder_validation_agreement_script_single_bounce(self):
+        # Regression guard for defect B1 (the reason this cell exists). The
+        # pre-fix builder rewrote wall samples to WALL_X + 2 from a mid-box
+        # start; that ~120-unit relocation was itself a second-difference kink,
+        # so _AGREEMENT_SCRIPT — which declares ONE velocity change, at script
+        # index 2 — produced velocity_change [T, T, F, F, F] and TWO detected
+        # bounces. Exactly one bounce must now be detected.
+        #
+        # Hand-derived trajectory (walls at 1 and 2, vc at 2):
+        #   t=0            -> x = X_HOME                        = 244
+        #   t=1 free, wall -> v = +4 (244+4 = 248 > 246)        = 248 (OOB)
+        #   t=2 forced     -> v = +4, still outward             = 252 (OOB)
+        #   t=3 free (vc), no wall -> smallest rung landing <= 244 is -8
+        #                                                       = 244
+        #   t=4..6 forced  -> v = -8                     = 236, 228, 220
+        #   x        = [244, 248, 252, 244, 236, 228, 220]
+        #   seg      = [     +4,  +4,  -8,  -8,  -8,  -8]
+        #   2nd diff = [          0, -12,   0,   0,   0]
+        #   oob      = [  F,   T,   T,   F,   F,   F,   F]
+        #   oob[1:-1]= [       T,   T,   F,   F,   F]
+        # => velocity_change [F, T, F, F, F] (index 1 <-> position index 2,
+        #    the declared change), bounce = oob[1:-1] & vc = [F, T, F, F, F],
+        #    random = ~oob[1:-1] & vc = [F, F, F, F, F].
+        samples = build_samples([_AGREEMENT_SCRIPT])
+        ico = IdealCountingObserver(prog_bar=False)
+        ico(samples, return_means=True)
+        assert ico.velocity_change[0].tolist() == [False, True, False, False, False]
+        assert ico.positions_oob[0].tolist() == [False, True, True, False, False, False, False]
+        assert ico.velocity_change_bounce[0].tolist() == [False, True, False, False, False]
+        assert ico.velocity_change_random[0].tolist() == [False, False, False, False, False]
 
 
 class TestTier2Invariants:
     # row 0 carries an occluded frame so ICO-fed batches have a grayzone.
+    # Both rows are INERT to the B1 builder fix. Hand-derived trajectories:
+    #   SCRIPTS[0] (vc at 2, no walls): [244, 240, 236, 234]
+    #       velocity_change [F, T], positions_oob [F, F, F, F]
+    #   SCRIPTS[1] (vc AND wall both at 1): [244, 248, 244, 240]
+    #       velocity_change [T, F], positions_oob [F, T, F, F]
+    # SCRIPTS[1] escaped the defect pre-fix because the declared change fell on
+    # the same index as the relocation, so the phantom kink and the real one
+    # coincided; the masks it hands the models are unchanged by the fix.
     SCRIPTS = [
         [Event(color=0), _gray(), Event(color=1, velocity_change=True), Event(color=1)],
         [
@@ -361,7 +487,16 @@ class TestTier2Invariants:
         assert torch.allclose(out_pad["betas"][0], out_solo["betas"][0], atol=1e-6)
         assert torch.allclose(out_pad["beliefs"][0, :n], out_solo["beliefs"][0], atol=1e-6)
 
-    # #6 (C7) colour cyclic equivariance.
+    # #6 (C7) colour cyclic equivariance. Same event geometry as
+    # _AGREEMENT_SCRIPT, so the B1 builder fix changes its trajectory the same
+    # way (two detected bounces -> one). The equivariance VERDICT is unaffected:
+    # `_rotated` touches only `color`, leaving velocity_change / positions_oob /
+    # bounce bit-identical between orig and rot, and both colour detectors are
+    # invariant under a cyclic relabel (ICO's `color_change` is
+    # `abs().max(-1) != 0`; V2's `changed` is `(argmax - argmax) % 3 == 1`).
+    # `occluded=True` is preserved by `_rotated`, so the grayzone frame is
+    # byte-identical too. The underlying RATES do change with the fix; the
+    # orig-vs-rot comparison these cells make does not.
     _EQUIV_SCRIPT = [
         Event(color=0),
         Event(color=0, at_wall=True),
@@ -481,6 +616,7 @@ class TestBugLedger:
 
     def test_ico_v2_agreement(self):
         # #10 (C11). On a controlled input the two counting observers agree.
+        #
         # DISPOSITION (Task 6, 2026-08-28): PROMOTED TO GREEN. The O2 root
         # cause the original xfail cited is fixed (E1), and the agreement held
         # through E2 and E3/E4: both estimators land on 0.5 on this script
@@ -489,12 +625,68 @@ class TestBugLedger:
         # different (Dirichlet 3-way vs per-channel Beta, hard vs expected
         # counts through occlusion), so a future divergence on a richer script
         # would be a finding, not a regression of this cell.
+        #
+        # ############################################################
+        # DISPOSITION SUPERSEDED (B1 builder fix). AGREEMENT NO LONGER
+        # HOLDS ON THIS SCRIPT, so C11 is currently UNCOVERED by the suite.
+        # The values below are hand-derived pending empirical confirmation.
+        # ############################################################
+        #
+        # WHY the 0.5/0.5 agreement was an artefact. Pre-fix, the builder's
+        # relocation jump made velocity_change = [T, T, F, F, F] — a PHANTOM
+        # bounce at velocity index 0 on top of the one declared at index 1.
+        # ICO pairs velocity_change[k] (centred on position index k+1) with
+        # color_change[:, 1:][k] (the colour change ARRIVING at position k+2) —
+        # a +1 misalignment in the MODEL, not the builder. The declared
+        # bounce-coincident colour change (colour 0 -> 1, arriving at position
+        # index 2) therefore sits at color_change[:, 1:][0], and only the
+        # phantom bounce at velocity index 0 could ever meet it. Removing the
+        # phantom leaves color_change_bounce identically zero.
+        #   => MODEL-SIDE FINDING for the model owner (src/ is not editable
+        #      here): ICO's velocity/colour pairing is off by one frame.
+        #
+        # Hand derivation on the fixed trajectory
+        # x = [244, 248, 252, 244, 236, 228, 220] (see the builder-validation
+        # cell above): velocity_change = [F, T, F, F, F], oob[1:-1] =
+        # [T, T, F, F, F], bounce = [F, T, F, F, F], random = [F]*5.
+        #
+        # ICO means_pccovc. colours_inferred = [R, R, G, G, G, B, B] (the
+        # grayzone at index 4 forward-fills to G), so
+        #   color_change            = [F, T, F, F, T, F]
+        #   color_change[:, 1:]     = [T, F, F, T, F]
+        #   mask_idx_after_grayzone[:, 1:] = [F, F, F, T, F]
+        #   color_change_bounce = (vc & cc[1:]) & ~miag[1:] = [0, 0, 0, 0, 0]
+        #   velocity_change_shifted = [F, T, F, F, F] (no grayzone overlap)
+        # pccovc pair = (vcs & ~ccb, ccb) = ([0,1,0,0,0], [0,0,0,0,0]); the
+        # Dirichlet counts prepend rows 0-1, giving the 7-row sequence
+        #   [(0,0), (1,0), (0,0), (1,0), (0,0), (0,0), (0,0)]
+        # whose cumulative sum at the last row is (2, 0), so
+        #   m_ovc[-1] = (1 + 0) / (1 + 1 + 2 + 0) = 1/4 = 0.25.
+        # (Pre-fix the same arithmetic gave (2, 2) -> 3/6 = 0.5, reproducing
+        # the documented value — which is what validates this method.)
+        #
+        # V2 cont. bounce[:, 1:-1] = oob[1:-1] & vc = [F, T, F, F, F], so the
+        # ONLY bounce frame is t = 2 (pre-fix t = 1 and t = 2 both bounced).
+        #   t=1: visible R->R, no bounce  -> beta_hz  1 -> 2
+        #   t=2: visible R->G, bounce     -> alpha_cont 1 -> 2
+        #   t=3: visible G->G, no bounce  -> beta_hz  2 -> 3
+        #   t=4,5: hidden, no bounce      -> hz accumulators only
+        #   t=6: visible B->B, no bounce  -> beta_hz
+        # cont is touched exactly once => (alpha_cont, beta_cont) = (2, 1) and
+        #   cont mean = 2 / 3 ~= 0.6667.
+        # (Pre-fix t=1 was a bounce, so beta_cont took the R->R "unchanged"
+        # count: (2, 2) -> 0.5, again reproducing the documented value.)
         samples = build_samples([_AGREEMENT_SCRIPT])
         ico = IdealCountingObserver(prog_bar=False)
         _, _, m_ovc, _ = ico(samples, return_means=True)
         out = IdealCountingObserverV2()(samples, return_means=True)
         a_cont, b_cont = out["betas"][0, 2], out["betas"][0, 3]
-        assert torch.isclose(m_ovc[0, -1], a_cont / (a_cont + b_cont), atol=1e-4)
+        assert torch.isclose(m_ovc[0, -1], torch.tensor(0.25), atol=1e-4)
+        assert torch.isclose(a_cont / (a_cont + b_cont), torch.tensor(2.0 / 3.0), atol=1e-4)
+        # Pin the DIVERGENCE too, so a later change that restores agreement here
+        # fails loudly and forces this cell to be re-dispositioned rather than
+        # quietly re-acquiring a property nobody re-derived.
+        assert not torch.isclose(m_ovc[0, -1], a_cont / (a_cont + b_cont), atol=1e-4)
 
 
 class TestV2OcclusionAndMutation:
