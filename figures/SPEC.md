@@ -202,6 +202,26 @@ share code worth reusing for `fig5`/`fig6`.
     checkpoints; checkpoint/handoff at the end. Figs 1–3 remain out of scope
     pending their own specification work.
 
+## Operator rulings (2026-08-31, figs 1–3)
+
+13. **Fig 1 stays hand-drawn.** Closed — no script, no vector redraw; the
+    panel is authored outside the pipeline.
+14. **Fig 2 is ruled in.** Content per this spec's mapping row:
+    `DS1-Humans-And-Models.py:1180-1296` (IBO/RNN/LSTM model-CWC material).
+    Note the deck geography: fig2 *page 1* is a placeholder schematic; the
+    code-generated IBO panels sit on deck pages 2–3
+    (`figure-to-code-map.md`, medium confidence) — visual verification for
+    fig2 therefore targets deck pages 2–3, a documented exception to the
+    page-1 scope rule. Implementer assumption, operator-vetoable: "ruled in"
+    binds this mapping.
+15. **Figs 2–3 begin immediately, despite the in-flight IBO rework.**
+    Operator direction (2026-08-31): figure/compute code must **import** the
+    in-repo IBO implementation (`learning_in_context.models.ideal_observer`)
+    wherever IBO behavior is needed — never copy it — so the concurrent
+    rework lands without collision. The existing constraint stands for
+    `hmdcpd`: its plotting/utility code is still *ported* into this repo,
+    not imported.
+
 ## Design rationale (context, skippable)
 
 - Panels-not-figures and the 100%-placement rule exist because external
