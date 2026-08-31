@@ -9,20 +9,29 @@ counting side) and `test_ico_grayzone_attribution_is_per_run` (W5, the per-run
 bug-ledger: fixing a bug flips its cell to a loud XPASS, signalling the marker's
 removal.
 
-NB the current IdealCountingObserver crashes (`ValueError: max() arg is an empty
+STALE PRECONDITION CLAIM, corrected 2026-08-31. This note used to read "the
+current IdealCountingObserver crashes (`ValueError: max() arg is an empty
 sequence`) on any batch with ZERO grayzone frames (Tier-3, deferred), so every
-ICO-fed batch below carries at least one occluded frame in some row.
+ICO-fed batch below carries at least one occluded frame in some row". The
+batch-global `max_grayzone_diff` machinery that raised it was deleted in 73ba679
+(per-run backward-only attribution). Re-measured at HEAD: the ICO runs clean on
+fully visible batches at T=6 and T=10, and the degenerate-input cells in the
+sibling characterization suite feed it no-grayzone T=2/T=3 batches directly. The
+occluded frame every script below still carries is therefore no longer a
+crash-avoidance requirement -- it is load-bearing only where a cell's derivation
+names it.
 
-OPEN (C11 agreement): the model-side off-by-one that the B1 builder fix exposed —
-ICO paired `velocity_change[k]` (centred on position k+1) with the colour change
-arriving at position k+2 — is FIXED (ICO-A), together with the dead
-explained-exit-change branch (ICO-B). ICO and V2 now agree on the underlying
-event tally for `_AGREEMENT_SCRIPT` (0 contingent failures, 1 contingent
-success), but their posterior means still differ: ICO's `get_dist_params` runs
-with `offset=2`, which DUPLICATES rows 0 and 1 of every count vector, and this
-script's only event sits at index 1. **C11 therefore remains UNCOVERED**, now
-for a single, precisely-named reason — defect E5, ruled an accident and kept
-inert/deferred by the PI (design doc, Q5). See `test_ico_v2_agreement`.
+CLOSED (C11 agreement): the model-side off-by-one that the B1 builder fix exposed
+— ICO paired `velocity_change[k]` (centred on position k+1) with the colour
+change arriving at position k+2 — was fixed by ICO-A, together with the dead
+explained-exit-change branch (ICO-B), which brought ICO and V2 onto the same
+underlying event tally for `_AGREEMENT_SCRIPT` (0 contingent failures, 1
+contingent success). Their posterior MEANS still differed, because ICO's
+`get_dist_params` ran with `offset=2` and DUPLICATED rows 0 and 1 of every count
+vector, and this script's only event sits at index 1 — defect E5. E5 is now
+FIXED (operator-directed): the prepend is prior-neutral zeros, ICO banks the
+event once, and both estimators read 2/3. **C11 IS COVERED.** See
+`test_ico_v2_agreement`.
 """
 
 import pytest
@@ -219,9 +228,10 @@ class TestBuilderValidation:
     builder<->detector tautology (sibling spec A13).
 
     Each literal batch carries a second, grayzone-bearing row (same positions,
-    one occluded frame) purely so the ICO does not hit its no-grayzone ValueError
-    (Tier-3); the hand table is asserted on row 0, and the detectors under test
-    are position-derived, so the extra row cannot perturb them.
+    one occluded frame). That row was added for a no-grayzone ValueError the ICO
+    no longer raises (see the module docstring); it is kept because the hand
+    table is asserted on row 0 and the detectors under test are position-derived,
+    so the extra row cannot perturb them either way.
 
     The first two cells feed LITERAL tensors, never the builder — they are the
     detector's own anchor and must stay untouched by builder changes. The
@@ -349,7 +359,8 @@ class TestBuilderValidation:
         # NB positions_oob[0] is now True: the pre-fix builder silently dropped
         # a wall declared on frame 0 (x[0] was always mid-box). It is inert for
         # V2 (bounce[:, 0] is forced False) but the builder no longer lies.
-        # third row: event-free, one occluded frame (ICO no-grayzone guard only).
+        # third row: event-free, one occluded frame (a vestige of the ICO's
+        # since-removed no-grayzone crash; inert, and asserted below anyway).
         grayzone_script = [
             Event(color=1),
             Event(color=1),
@@ -740,7 +751,8 @@ class TestBugLedger:
         # leaks across the visible stretch at frames 6-7 and is credited with
         # run B's exit change instead: color_change_bounce[-1] flips to 1,
         # velocity_change_random_shifted[-1] is replanted True, and the rates go
-        # m_ovc[-1] 2/3 -> 3/4, m_nvc[-1] 1/9 -> 1/16.
+        # m_ovc[-1] 2/3 -> 3/4, m_nvc[-1] 1/8 -> 1/14 (mutant re-measured
+        # 2026-08-31 under E5; pre-E5 the same mutant read 1/9 -> 1/16).
         ico = IdealCountingObserver(prog_bar=False)
         _, m_nvc, m_ovc, _ = ico(build_samples([_CAUSAL_SCRIPT]), return_means=True)
         # attribution masks: the unexplained exit change is RANDOM, not contingent
@@ -750,10 +762,18 @@ class TestBugLedger:
         assert not bool(ico.velocity_change_random_shifted[0, -1])
         assert not bool(ico.velocity_change_bounce_shifted[0, -1])
         # the rates that follow from those counts: counts_pccovc[-1] = (0, 1)
-        # -> (1 + 1) / (1 + 1 + 0 + 1) = 2/3; counts_pccnvc[-1] = (15, 1)
-        # -> (1 + 1) / (1 + 1 + 15 + 1) = 1/9.
+        # -> (1 + 1) / (1 + 1 + 0 + 1) = 2/3; counts_pccnvc[-1] = (13, 1)
+        # -> (1 + 1) / (1 + 1 + 13 + 1) = 1/8.
+        #
+        # E5 (head duplication removed). New terminal counts are the old ones
+        # minus the old `counts[:, 1]`, which WAS the duplicated head. Measured
+        # heads on this script: pccnvc (2, 0) -- j=0 and j=1 are both no-change
+        # opportunities, since the script's only velocity change is stripped from
+        # its own cell and replanted on run A's exit cell (j=5) -- so pccnvc goes
+        # (15, 1) -> (13, 1) and 1/9 -> 1/8. pccovc's head is (0, 0), so the
+        # contingent channel is UNCHANGED at (0, 1) -> 2/3.
         assert torch.isclose(m_ovc[0, -1], torch.tensor(2.0 / 3.0), atol=1e-4)
-        assert torch.isclose(m_nvc[0, -1], torch.tensor(1.0 / 9.0), atol=1e-4)
+        assert torch.isclose(m_nvc[0, -1], torch.tensor(1.0 / 8.0), atol=1e-4)
 
     def test_ico_v2_agreement(self):
         # #10 (C11). On a controlled input the two counting observers agree.
@@ -768,15 +788,23 @@ class TestBugLedger:
         # would be a finding, not a regression of this cell.
         #
         # ############################################################
-        # DISPOSITION SUPERSEDED TWICE.
+        # DISPOSITION SUPERSEDED THREE TIMES.
         #   (a) B1 builder fix: agreement broke, and the cell was pinned at
         #       ICO 0.25 / V2 2/3 while the model-side off-by-one it exposed
         #       awaited a ruling.
-        #   (b) ICO-A + ICO-B (this work): the off-by-one is FIXED. Agreement is
-        #       STILL NOT restored, so C11 stays UNCOVERED — but the residual
-        #       gap now has one named cause (E5, deferred), not an unexplained
-        #       misalignment. The values below are hand-derived pending
-        #       empirical confirmation.
+        #   (b) ICO-A + ICO-B: the off-by-one is FIXED, but agreement was still
+        #       not restored (ICO 0.75 / V2 2/3), leaving C11 UNCOVERED with one
+        #       named cause: E5, the offset=2 head duplication.
+        #   (c) E5 FIXED (this work, operator-directed): `get_dist_params` now
+        #       prepends prior-neutral zeros instead of a copy of count rows 0
+        #       and 1, so this script's single contingent success is banked ONCE.
+        #       ICO reads (0, 1) -> 2/3 and V2 reads (2, 1) -> 2/3.
+        #       **AGREEMENT RESTORED; C11 IS NOW COVERED.**
+        #       As in disposition (a), this is agreement on ONE controlled input,
+        #       not an equivalence proof: the estimators are still structurally
+        #       different (Dirichlet 3-way vs per-channel Beta, hard counts vs
+        #       expected counts through occlusion), so a divergence on a richer
+        #       script would be a finding, not a regression of this cell.
         # ############################################################
         #
         # WHY the original 0.5/0.5 agreement was an artefact. Pre-B1-fix, the
@@ -808,23 +836,21 @@ class TestBugLedger:
         #      the grayzone path, not the contingent one)
         #   velocity_change_shifted = [F, T, F, F, F] (no grayzone overlap)
         # pccovc pair = (vcs & ~ccb, ccb) = ([0,0,0,0,0], [0,1,0,0,0]); the
-        # Dirichlet counts prepend rows 0-1, giving the 7-row sequence
-        #   [(0,0), (0,1), (0,0), (0,1), (0,0), (0,0), (0,0)]
-        # whose cumulative sum at the last row is (0, 2), so
-        #   m_ovc[-1] = (1 + 2) / (1 + 1 + 0 + 2) = 3/4 = 0.75.
-        # (The same arithmetic reproduces the two previously documented values —
-        # pre-B1 (2, 2) -> 0.5, post-B1 (2, 0) -> 0.25 — which validates it.)
+        # Dirichlet counts prepend two PRIOR-NEUTRAL zero rows (E5 fix), giving
+        # the 7-row sequence
+        #   [(0,0), (0,0), (0,0), (0,1), (0,0), (0,0), (0,0)]
+        # whose cumulative sum at the last row is (0, 1), so
+        #   m_ovc[-1] = (1 + 1) / (1 + 1 + 0 + 1) = 2/3.
+        # Pre-E5 the prepend was a COPY of rows 0 and 1; this script's only event
+        # sits at row 1, so it was banked twice -> (0, 2) -> 3/4. The same
+        # arithmetic reproduces every previously documented value on this cell —
+        # pre-B1 (2, 2) -> 0.5, post-B1 (2, 0) -> 0.25, post-ICO-A (0, 2) -> 0.75
+        # — which validates it.
         #
-        # WHY THEY STILL DIVERGE, exactly. Both estimators now see the SAME
-        # contingent tally on this script: one trial, one success, zero
-        # failures. V2 banks it once -> (alpha_cont, beta_cont) = (2, 1) ->
-        # 2/3. ICO's get_dist_params runs with offset=2, which prepends a COPY
-        # of count rows 0 and 1 before the cumulative sum; this script's only
-        # event sits at row 1, so ICO banks it TWICE -> (0, 2) -> 3/4. Drop the
-        # duplication and ICO would read (0, 1) -> (1+1)/(1+1+0+1) = 2/3,
-        # agreeing exactly. The head duplication is defect E5, ruled an
-        # accident and kept inert/deferred (design doc, Q5) — so this cell
-        # pins the divergence AND its single remaining cause.
+        # WHY THEY NOW AGREE, exactly. Both estimators see the SAME contingent
+        # tally on this script: one trial, one success, zero failures. V2 banks
+        # it once -> (alpha_cont, beta_cont) = (2, 1) -> 2/3. ICO, no longer
+        # double-counting its head, banks it once too -> (0, 1) -> 2/3.
         #
         # V2 cont. bounce[:, 1:-1] = oob[1:-1] & vc = [F, T, F, F, F], so the
         # ONLY bounce frame is t = 2 (pre-fix t = 1 and t = 2 both bounced).
@@ -842,25 +868,24 @@ class TestBugLedger:
         _, _, m_ovc, _ = ico(samples, return_means=True)
         out = IdealCountingObserverV2()(samples, return_means=True)
         a_cont, b_cont = out["betas"][0, 2], out["betas"][0, 3]
-        assert torch.isclose(m_ovc[0, -1], torch.tensor(0.75), atol=1e-4)
-        assert torch.isclose(a_cont / (a_cont + b_cont), torch.tensor(2.0 / 3.0), atol=1e-4)
-        # Pin the DIVERGENCE too, so a later change that restores agreement here
-        # fails loudly and forces this cell to be re-dispositioned rather than
-        # quietly re-acquiring a property nobody re-derived.
-        assert not torch.isclose(m_ovc[0, -1], a_cont / (a_cont + b_cont), atol=1e-4)
-        # ... and pin the ATTRIBUTED CAUSE, so E5's eventual fix flips this cell
-        # rather than silently shifting the gap onto something else.
-        # `counts_pccovc` is the (B, T, 2) CUMULATIVE sum of
-        #   [row_0, row_1, row_0, row_1, ..., row_{T-3}]
-        # so its slot at index 1 is exactly the duplicated head (row_0 + row_1)
-        # and `counts[-1] - counts[1]` is the honest, once-counted tally.
-        # Subtract the duplication and ICO reproduces V2's contingent mean.
+        v2_cont = a_cont / (a_cont + b_cont)
+        assert torch.isclose(m_ovc[0, -1], torch.tensor(2.0 / 3.0), atol=1e-4)
+        assert torch.isclose(v2_cont, torch.tensor(2.0 / 3.0), atol=1e-4)
+        # C11 proper: the two estimators AGREE. This assertion replaces the
+        # divergence pin (`assert not torch.isclose(...)`) that stood here while
+        # E5 was deferred; a regression that re-opens the gap now fails loudly.
+        assert torch.isclose(m_ovc[0, -1], v2_cont, atol=1e-4)
+        # ... and pin the underlying tally, so agreement cannot be re-acquired by
+        # two compensating count errors. `counts_pccovc` is the (B, T, 2)
+        # CUMULATIVE sum of [0, 0, row_0, row_1, ..., row_{T-3}]: the head is two
+        # prior-neutral zero rows (E5 fix), so slot 1 is still all-zero and the
+        # terminal slot is the honest, once-counted tally. Pre-E5 the head was a
+        # copy of rows 0 and 1 and this read [0.0, 2.0].
         counts = ico.counts_pccovc[0]
-        assert counts[-1].tolist() == [0.0, 2.0]  # one event, banked twice
-        failures, successes = (counts[-1] - counts[1]).tolist()
-        assert (failures, successes) == (0.0, 1.0)
-        unduplicated = (1 + successes) / (1 + 1 + failures + successes)
-        assert torch.isclose(torch.tensor(unduplicated), a_cont / (a_cont + b_cont), atol=1e-4)
+        assert counts[1].tolist() == [0.0, 0.0]  # prior-neutral head
+        assert counts[-1].tolist() == [0.0, 1.0]  # one event, banked ONCE
+        # V2's own tally is the same event once: alpha_cont 1 -> 2, beta_cont 1.
+        assert torch.allclose(out["betas"][0, 2:], torch.tensor([2.0, 1.0]), atol=1e-5)
 
 
 class TestV2OcclusionAndMutation:

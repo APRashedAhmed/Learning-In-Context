@@ -545,6 +545,18 @@ class IdealCountingObserver(IdealObserverModel):
             + 1
         )  # Plus one to get the idx after the highest grayzone idx
 
+        # Degenerate-input guard: a row occluded for its ENTIRE length has no
+        # post-grayzone frame to copy from -- ``idx_timesteps_color`` is
+        # (last gray index) + 1 == ``timesteps``, which indexed out of bounds on
+        # the very next line (IndexError). Drop those rows from the backfill
+        # rather than crashing: they keep the mask colour, so no colour change is
+        # ever declared, the counts stay empty and every rate sits at its Beta
+        # prior mean (and the belief stays uniform, which the cyclic ``T``
+        # preserves).
+        backfillable = idx_timesteps_color < timesteps
+        idx_batch_remaining = idx_batch_remaining[backfillable]
+        idx_timesteps_color = idx_timesteps_color[backfillable]
+
         backfill_colors = colors_inferred[idx_batch_remaining, idx_timesteps_color, :]
         backfill_mask = timesteps_arange.unsqueeze(0) < idx_timesteps_color.unsqueeze(1)
 
@@ -585,9 +597,8 @@ class IdealCountingObserver(IdealObserverModel):
         #
         # Everything is therefore re-sliced onto the velocity/event space,
         # index j <-> frame j+1, width T-2 (shapes are unchanged, so
-        # ``get_dist_params``' offset=2 head duplication still yields width T
-        # rate curves and the belief loop's ``means_*[:, t]`` indexing is
-        # untouched).
+        # ``get_dist_params``' offset=2 head padding still yields width T rate
+        # curves and the belief loop's ``means_*[:, t]`` indexing is untouched).
         color_change_at_event = color_change[:, :-1]  # colour change at frame j+1
         mask_grayzone_at_event = mask_grayzone[:, 1:-1]  # frame j+1 is occluded
         mask_exit_at_event = mask_idx_after_grayzone[:, :-1]  # frame j+1 is an exit
@@ -811,9 +822,29 @@ class IdealCountingObserver(IdealObserverModel):
             if t > 0:
                 beliefs[mask_grayzone_t, t] = beliefs[mask_grayzone_t, t - 1]
 
-            self.probability_bounce = (
-                self.positions_oob[:, t] + self.velocity_change_random[:, max(0, t - 2)]
-            ).float()
+            # Overflow fix: the UNION of the two velocity-event flags,
+            # a + b - a*b ("probability of ANY velocity event"), consistent with
+            # the E8 ruling that a random velocity change is part of the bounce
+            # event. The OLD expression was a bare sum --
+            #   (self.positions_oob[:, t]
+            #    + self.velocity_change_random[:, max(0, t - 2)]).float()
+            # -- whose range is only bounded because both operands are BOOL
+            # tensors (torch's bool ``+`` saturates as logical OR). Cast either
+            # side to float and it reaches 2, at which point ``T`` emits
+            # transition probabilities outside [0, 1]. The union is exact for
+            # booleans, so this is a semantics-preserving hardening.
+            #
+            # Degenerate-input guard: a T <= 2 sequence has no detectable
+            # velocity change at all (the second difference needs a neighbour on
+            # both sides), so ``velocity_change_random`` is (B, 0) and indexing
+            # it raised IndexError. Read it as "no random velocity change
+            # observed" -- the prior-neutral reading -- leaving the wall term.
+            oob_t = self.positions_oob[:, t].float()
+            if self.velocity_change_random.shape[1] > 0:
+                vcr_t = self.velocity_change_random[:, max(0, t - 2)].float()
+            else:
+                vcr_t = torch.zeros_like(oob_t)
+            self.probability_bounce = oob_t + vcr_t - oob_t * vcr_t
             self.pvc = self.means_pvc[:, t]
             self.pccovc = self.means_pccovc[:, t]
             self.pccnvc = self.means_pccnvc[:, t]
@@ -896,19 +927,23 @@ class IdealCountingObserver(IdealObserverModel):
         offset=2,
     ):
         stacked_vectors = torch.stack(change_vectors, dim=-1)
-        # # pad = torch.zeros((change_vectors[0].shape[0], offset, len(change_vectors)))
-        # pad = stacked_vectors[:, :offset]
-        # pad[:, :, 0] = stacked_vectors[:, :offset, 0]
-        # pad[:, :, 1] = stacked_vectors[:, :offset, 1]
 
-        counts = torch.cumsum(
-            torch.cat(
-                [
-                    stacked_vectors[:, :offset],
-                    stacked_vectors,
-                ],
-                dim=1,
-            ),
-            dim=1,
+        # E5 fix (operator-directed): the head padding is PRIOR-NEUTRAL zeros.
+        # The OLD code prepended a COPY of the first ``offset`` count rows --
+        #     torch.cat([stacked_vectors[:, :offset], stacked_vectors], dim=1)
+        # (the same idea also sat in a dead block, ``pad = stacked_vectors[:,
+        # :offset]``) -- so the cumulative sum banked event rows 0..offset-1
+        # TWICE and the earliest events were double-counted for the whole curve.
+        # Zeros contribute no counts, so early estimates sit at the Beta prior.
+        # Width and time alignment are unchanged: the output is still
+        # ``offset + (T - 2) == T`` wide and ``counts[:, t]`` still summarises
+        # event rows 0..t-offset, so ``means_*[:, t]`` keeps the same evidence
+        # horizon. Side effect: the pad is no longer clipped on short inputs
+        # (``stacked_vectors[:, :offset]`` was only ``min(offset, T - 2)`` rows),
+        # so T=2 / T=3 sequences now get full-width, T-aligned rate curves
+        # instead of a zero-width Dirichlet / an out-of-range ``means_*[:, t]``.
+        pad = stacked_vectors.new_zeros(
+            (stacked_vectors.shape[0], offset, stacked_vectors.shape[-1])
         )
+        counts = torch.cumsum(torch.cat([pad, stacked_vectors], dim=1), dim=1)
         return Dirichlet(prior + counts), counts

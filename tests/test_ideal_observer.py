@@ -135,6 +135,65 @@ class TestIdealCountingObserver:
         beliefs = ico(samples, return_means=False)
         assert torch.allclose(beliefs.sum(-1), torch.ones(2, 14), atol=ATOL)
 
+    def test_coincident_wall_and_random_change_keeps_beliefs_in_range(self):
+        # Overflow fix. `probability_bounce` is now the UNION of the two
+        # velocity-event flags, `a + b - a*b`; it used to be the bare sum
+        # `positions_oob[:, t] + velocity_change_random[:, max(0, t - 2)]`.
+        #
+        # NON-VACUITY, measured 2026-08-31. At HEAD the bare sum could not
+        # actually reach 2: both operands are BOOL tensors and torch's bool `+`
+        # saturates as logical OR, so the pre-fix expression already WAS the
+        # union. The live mutant this cell kills is the natural refactor that
+        # casts before adding (`oob_t + vcr_t`, floats): verified against a
+        # patched copy of the module, it drives `probability_bounce` to 2 at the
+        # overflow frame and beliefs[0, 6] to [1.1167, 0, -0.1167].
+        #
+        # Fixture, built so the mutant genuinely ESCAPES [0, 1] (a low pccovc is
+        # not enough -- p_transition = pccnvc*(pvc - 1) + pccovc*(2 - pvc) only
+        # exceeds 1 once pccovc is well above 0.5, so BOTH velocity changes are
+        # given a coincident colour change):
+        #   x = [240, 248, 240, 232, 224, 216, 252, 288]
+        #     v      = [ 8, -8, -8, -8, -8, 36, 36]
+        #     v2diff = [-16,  0,  0,  0, 44,  0]  -> vc at frames 1 and 5
+        #     oob    = [F, T, F, F, F, F, T, T]   (>246), oob[1:-1] = [T,F,F,F,F,T]
+        #   => velocity_change_bounce = [T, F, F, F, F, F] (frame 1, at the wall)
+        #      velocity_change_random = [F, F, F, F, T, F] (frame 5, mid-box)
+        #   colours [R, G, G, GRAY, G, B, B, B] -> a change at frame 1 and at
+        #   frame 5, each coincident with its velocity change, so both land in
+        #   color_change_bounce and pccovc[6] = (1 + 2)/(2 + 0 + 2) = 0.75.
+        #   The occluded frame 3 follows this suite's convention of giving
+        #   ICO-fed batches a grayzone; it is inert here (its run exits with no
+        #   colour change), and the ICO no longer requires one either way.
+        #
+        # THE OVERFLOW FRAME is t = 6: positions_oob[6] is True (288 > 246) AND
+        # velocity_change_random[max(0, 6 - 2)] = velocity_change_random[4] is
+        # True (frame 5). Union -> 1; bare float sum -> 2.
+        # fmt: off
+        pos = [[240.0, 128.0], [248.0, 128.0], [240.0, 128.0], [232.0, 128.0],
+               [224.0, 128.0], [216.0, 128.0], [252.0, 128.0], [288.0, 128.0]]
+        col = [_R, _G, _G, _GRAY, _G, _B, _B, _B]
+        # fmt: on
+        samples = torch.cat(
+            [
+                torch.tensor([pos], dtype=torch.float),
+                torch.tensor([col], dtype=torch.float),
+            ],
+            dim=-1,
+        )
+        ico = IdealCountingObserver(prog_bar=False)
+        beliefs = ico(samples, return_means=False)
+        # the fixture really does hit the overflow pattern
+        assert ico.positions_oob[0, 6].item() is True
+        assert ico.velocity_change_random[0, 4].item() is True
+        # T is row-stochastic and its rows are genuine probabilities, so the
+        # propagated beliefs stay a valid categorical distribution.
+        assert torch.allclose(beliefs.sum(-1), torch.ones(1, 8), atol=ATOL)
+        assert (beliefs >= -ATOL).all() and (beliefs <= 1 + ATOL).all()
+        # the discriminating value: under the mutant this row is
+        # [1.1167, 0, -0.1167]. Row-sums stay 1 either way, so the [0, 1] bound
+        # is what carries this cell -- do not drop it as redundant.
+        assert torch.allclose(beliefs[0, 6], torch.tensor([0.75, 0.0, 0.25]), atol=ATOL)
+
     def test_estimated_rates_are_probabilities(self, samples):
         ico = IdealCountingObserver(prog_bar=False)
         _, m_nvc, m_ovc, m_pvc = ico(samples, return_means=True)
@@ -150,7 +209,9 @@ class TestIdealCountingObserver:
         # `velocity_change[j]` is frame j+1 while `color_change[:, 1:][j]` was
         # frame j+2, so a genuinely coincident bounce+colour change could never
         # land in the same slot). The estimate therefore moves the OTHER WAY
-        # now: 0.25 (pure failure) -> 0.75 (pure success).
+        # now: 0.25 (pure failure) -> 0.75 (pure success). E5 (the offset=2 head
+        # duplication) then removed the second, spurious copy of that success:
+        # counts (0, 2) -> (0, 1), so the estimate is 2/3, still above 0.5.
         ico = IdealCountingObserver(prog_bar=False)
         _, _, m_ovc, _ = ico(samples, return_means=True)
         assert not torch.isclose(m_ovc[0, -1], torch.tensor(0.5), atol=ATOL)
@@ -159,9 +220,19 @@ class TestIdealCountingObserver:
     def test_golden_final_outputs(self, samples):
         ico = IdealCountingObserver(prog_bar=False)
         beliefs, m_nvc, m_ovc, m_pvc = ico(samples, return_means=True)
-        # ICO-A (bounce/colour pairing skew) re-baselines BOTH rows. HAND-DERIVED
-        # (empirically confirmed 2026-08-31, 47/47). Common index convention: every
-        # (B, T-2) event mask now lives in the event space, index j <-> frame j+1.
+        # ICO-A (bounce/colour pairing skew) then E5 (the offset=2 head
+        # duplication) re-baseline BOTH rows. HAND-DERIVED (empirically confirmed
+        # 2026-08-31, 49/49). Common index convention: every (B, T-2) event mask
+        # lives in the event space, index j <-> frame j+1.
+        #
+        # E5 ARITHMETIC (uniform across every value below). `get_dist_params`
+        # used to prepend a COPY of event rows 0 and 1 before the cumulative sum;
+        # it now prepends two PRIOR-NEUTRAL zero rows. Since the old
+        # `counts[:, 1]` was exactly that duplicated head (row_0 + row_1), every
+        # new terminal count is `old counts[-1] - old counts[1]`. Measured heads
+        # for this fixture: pccnvc (1, 0) both rows, pccovc (0, 1) both rows,
+        # pvc (1, 0) both rows -- i.e. each row's j=0 no-change opportunity and,
+        # for pccovc, the j=1 bounce success were being banked twice.
         #
         # seq0: x = [232, 240, 248, 240, ...] -> oob at frame 2 only,
         #   velocity_change = [F, T, F, ...] (j=1 <-> frame 2) and that vc is a
@@ -170,22 +241,24 @@ class TestIdealCountingObserver:
         #   True at j=1 (frame 2) and j=6 (frame 7, the grayzone exit).
         #     color_change_bounce = vc & cc & ~exit -> {j=1}   (was EMPTY: the
         #       frame-2 change used to be read one cell early, at old-space j=0,
-        #       and misfiled as a random-channel success -- and j=0 is one of the
-        #       two rows the head duplication copies, so it supplied 2 of the 3
-        #       successes behind the old 4/17)
+        #       and misfiled as a random-channel success)
         #     color_change_random = {j=6} only, via the exit path (the run
         #       [4, 6] carries no vc, so the exit change stays random)
         #     velocity_change_shifted = {j=1}
-        #   pccnvc pair (~vcs, ccr): the offset=2 head duplication prepends rows
-        #     j=0, j=1, so counts = (1 + 11, 0 + 1) = (12, 1) -> 2/15
-        #     (was (12, 3) -> 4/17).
-        #   pccovc pair (vcs & ~ccb, ccb): j=1 is now a SUCCESS, so slot 0 is
-        #     empty and the duplicated row j=1 counts it twice:
-        #     (0, 2) -> 3/4 (was (2, 0) -> 1/4).
-        #   pvc pair is built from the UNSHIFTED detectors -> unchanged, 1/14.
+        #   pccnvc pair (~vcs, ccr): 11 no-change opportunities (j != 1) and the
+        #     one exit success at j=6 -> counts (11, 1) -> 2/14 = 1/7
+        #     (E5: was (1 + 11, 0 + 1) = (12, 1) -> 2/15).
+        #   pccovc pair (vcs & ~ccb, ccb): j=1 is a SUCCESS and nothing else is a
+        #     contingent opportunity -> (0, 1) -> 2/3
+        #     (E5: the duplicated row j=1 banked that success twice, (0, 2) -> 3/4).
+        #   pvc pair (~vc, vc_random) is built from the UNSHIFTED detectors: 11
+        #     no-vc frames, no random vc -> (11, 0) -> 1/13
+        #     (E5: was (1 + 11, 0) = (12, 0) -> 1/14).
         #   beliefs[0, -1]: frame 13 is visible blue -> [0, 0, 1], propagated one
-        #     step. probability_bounce = 0, so vc = pvc = 1/14 and
-        #     p_transition = (2/15)(13/14) + (3/4)(1/14) = 149/840 = 0.177381.
+        #     step. probability_bounce = 0, so vc = pvc = 1/13 and
+        #     p_transition = (1/7)(12/13) + (2/3)(1/13)
+        #                  = 36/273 + 14/273 = 50/273 = 0.183150
+        #     (E5: was (2/15)(13/14) + (3/4)(1/14) = 149/840 = 0.177381).
         #
         # seq1: bounce at frame 2 (y = 8 < 10), colours [B, B, R, GRAY, GRAY,
         #   R, R, R, G, G, G, PAD x3] -> inferred [B, B, R, R, R, R, R, R, G, G,
@@ -195,20 +268,20 @@ class TestIdealCountingObserver:
         #   carries no vc, so the exit path stays inert (DRIFT-1's verdict for
         #   this row is unchanged: velocity_change_shifted = {j=1}).
         #     color_change_bounce = {j=1}; color_change_random = {j=7, j=10}.
-        #   pccnvc: (1 + 11, 0 + 2) = (12, 2) -> 3/16 (was (12, 4) -> 5/18; the
-        #     frame-2 change left the random channel and the head duplication no
-        #     longer doubles a success at j=0).
-        #   pccovc: (0, 2) -> 3/4 (was (2, 0) -> 1/4), same arithmetic as seq0.
+        #   pccnvc: (11, 2) -> 3/15 = 1/5 (E5: was (1 + 11, 0 + 2) = (12, 2)
+        #     -> 3/16).
+        #   pccovc: (0, 1) -> 2/3 (E5: was (0, 2) -> 3/4), same arithmetic as seq0.
+        #   pvc: (11, 0) -> 1/13 (E5: was (12, 0) -> 1/14).
         #   beliefs[1, -1] is a PAD frame, never written in the loop, so it stays
         #     at the 1/3 init regardless.
         assert torch.allclose(
             beliefs[:, -1],
-            torch.tensor([[149 / 840, 0.0, 691 / 840], [1 / 3, 1 / 3, 1 / 3]]),
+            torch.tensor([[50 / 273, 0.0, 223 / 273], [1 / 3, 1 / 3, 1 / 3]]),
             atol=ATOL,
         )
-        assert torch.allclose(m_nvc[:, -1], torch.tensor([2 / 15, 3 / 16]), atol=ATOL)
-        assert torch.allclose(m_ovc[:, -1], torch.tensor([0.75, 0.75]), atol=ATOL)
-        assert torch.allclose(m_pvc[:, -1], torch.tensor([1 / 14, 1 / 14]), atol=ATOL)
+        assert torch.allclose(m_nvc[:, -1], torch.tensor([1 / 7, 1 / 5]), atol=ATOL)
+        assert torch.allclose(m_ovc[:, -1], torch.tensor([2 / 3, 2 / 3]), atol=ATOL)
+        assert torch.allclose(m_pvc[:, -1], torch.tensor([1 / 13, 1 / 13]), atol=ATOL)
 
     def test_deterministic(self, samples):
         ico = IdealCountingObserver(prog_bar=False)
@@ -273,7 +346,7 @@ class TestIdealCountingObserver:
 
     def test_attribution_window_is_spec_closed_interval(self):
         # DRIFT-1. Pins the SPEC's [s, e] attribution window on EXACT boolean
-        # arrays (no Dirichlet arithmetic, no offset=2 head duplication), on the
+        # arrays (no Dirichlet arithmetic, no offset=2 head padding), on the
         # two cases where [s, e] and the old [s-1, e-1] disagree.
         #
         # row A -- LENGTH-1 grayzone run at frame 4 carrying a bounce vc at
@@ -352,6 +425,121 @@ class TestIdealCountingObserver:
         assert ico.velocity_change_random_shifted[1].tolist() == expected_b
         assert ico.color_change_random[1].tolist() == [0.0] * 6
         assert ico.color_change_bounce[1].tolist() == [0.0, 0.0, 0.0, 0.0, 0.0, 1.0]
+
+
+class TestIdealCountingObserverDegenerateInputs:
+    """Inputs that used to CRASH the ICO, and what it now emits instead.
+
+    Operator-approved semantics for all three: do not crash; skip the
+    un-computable updates and leave the latent (colour) predictions at their
+    initialisation -- uniform beliefs, prior-mean colour rates.
+
+    Pre-existing crashes, located empirically at c0ef72e:
+      all-gray  IndexError in the belief backfill -- `idx_timesteps_color` is
+                (last gray index) + 1, which equals T when a row is occluded end
+                to end, so the gather ran off the time axis.
+      T = 2     RuntimeError from a zero-width Dirichlet, then IndexError on
+                `velocity_change_random[:, max(0, t - 2)]` (a (B, 0) mask).
+      T = 3     IndexError on `means_pvc[:, t]`: the rate curve came out 2 wide
+                instead of 3.
+    The T=2 Dirichlet and the whole T=3 crash were fixed STRUCTURALLY by the E5
+    head-padding change -- `stacked_vectors[:, :offset]` was only
+    `min(offset, T - 2)` rows wide, whereas the zero pad is always `offset` rows,
+    so the curve is `offset + (T - 2) == T` wide for every T >= 2. Only two
+    explicit guards remain (the backfill filter and the (B, 0) random-change
+    read); T=3 needs none, and none was added.
+
+    NB positions are NEVER occluded in this task -- only colours are -- so an
+    all-gray row still carries a full velocity stream. Its pccnvc / pvc curves
+    therefore keep accumulating genuine no-velocity-change FAILURES from the
+    positions; that is the model's pre-existing convention for occluded frames
+    (every grayzone cell is a `~velocity_change_shifted` opportunity), not
+    something these guards introduce. What must stay untouched is the COLOUR
+    evidence, which is what the cells below pin.
+    """
+
+    _LINE6 = [[100.0 + 4 * t, 128.0] for t in range(6)]
+
+    @staticmethod
+    def _make(rows):
+        return torch.cat(
+            [
+                torch.tensor([p for p, _ in rows], dtype=torch.float),
+                torch.tensor([c for _, c in rows], dtype=torch.float),
+            ],
+            dim=-1,
+        )
+
+    def test_all_grayzone_sequence_runs_with_latents_at_init(self):
+        ico = IdealCountingObserver(prog_bar=False)
+        beliefs, m_nvc, m_ovc, m_pvc = ico(
+            self._make([(self._LINE6, [_GRAY] * 6)]), return_means=True
+        )
+        assert beliefs.shape == (1, 6, 3) and m_nvc.shape == (1, 6)
+        # Beliefs stay at the 1/3 init for every frame. No frame is ever
+        # visible, so the belief is only ever propagated through T -- and the
+        # cyclic T is doubly stochastic, so uniform is its stationary point.
+        assert torch.allclose(beliefs, torch.full((1, 6, 3), 1 / 3), atol=ATOL)
+        # No colour evidence is ever banked: neither colour channel declares
+        # anything, so the contingent rate sits at its (1, 1) prior mean for the
+        # whole curve.
+        assert (ico.color_change_bounce == 0).all()
+        assert (ico.color_change_random == 0).all()
+        assert torch.allclose(m_ovc, torch.full((1, 6), 0.5), atol=ATOL)
+        assert (ico.counts_pccnvc[..., 1] == 0).all()  # zero pccnvc SUCCESSES
+        assert (ico.counts_pccovc == 0).all()  # no contingent opportunity at all
+        # Characterized, not endorsed (see the class docstring): the failure
+        # side of the hazard/pvc channels still accrues from the visible
+        # positions, so those curves decay 1/2, 1/2, 1/3, 1/4, 1/5, 1/6.
+        expected_decay = torch.tensor([[0.5, 0.5, 1 / 3, 0.25, 0.2, 1 / 6]])
+        assert torch.allclose(m_nvc, expected_decay, atol=ATOL)
+        assert torch.allclose(m_pvc, expected_decay, atol=ATOL)
+
+    def test_two_frame_sequence_runs_with_rates_at_priors(self):
+        # T = 2: the second difference needs a neighbour on both sides, so there
+        # is NO event cell at all. The entire count curve is the prior-neutral
+        # head pad, and every rate is the bare (1, 1) prior mean.
+        ico = IdealCountingObserver(prog_bar=False)
+        beliefs, m_nvc, m_ovc, m_pvc = ico(
+            self._make([([[100.0, 128.0], [104.0, 128.0]], [_R, _G])]), return_means=True
+        )
+        assert beliefs.shape == (1, 2, 3)
+        for m in (m_nvc, m_ovc, m_pvc):
+            assert m.shape == (1, 2)
+            assert torch.allclose(m, torch.full((1, 2), 0.5), atol=ATOL)
+        assert (ico.counts_pvc == 0).all()
+        assert torch.allclose(beliefs.sum(-1), torch.ones(1, 2), atol=ATOL)
+
+    def test_three_frame_sequence_runs_with_rates_at_priors(self):
+        # T = 3: exactly ONE event cell (j = 0 <-> frame 1), reached only by the
+        # last slot of the curve. The straight line declares no velocity change
+        # there, so that slot banks a single pvc FAILURE -- (1 + 0)/(2 + 1 + 0)
+        # = 1/3 -- and both colour channels, which have no opportunity, stay at
+        # the 0.5 prior mean across the whole curve.
+        ico = IdealCountingObserver(prog_bar=False)
+        beliefs, m_nvc, m_ovc, m_pvc = ico(
+            self._make([([[100.0, 128.0], [104.0, 128.0], [108.0, 128.0]], [_R, _G, _G])]),
+            return_means=True,
+        )
+        assert beliefs.shape == (1, 3, 3)
+        assert torch.allclose(m_nvc, torch.full((1, 3), 0.5), atol=ATOL)
+        assert torch.allclose(m_ovc, torch.full((1, 3), 0.5), atol=ATOL)
+        assert torch.allclose(m_pvc, torch.tensor([[0.5, 0.5, 1 / 3]]), atol=ATOL)
+        assert torch.allclose(beliefs.sum(-1), torch.ones(1, 3), atol=ATOL)
+
+    def test_degenerate_batchmate_leaves_normal_row_bit_identical(self):
+        # The guards must be per-row, not batch-global: an all-gray row must not
+        # perturb a well-formed batch-mate by so much as a ULP. The two rows are
+        # the SAME length (T = 6) on purpose, so this cell isolates degeneracy
+        # rather than re-testing padding invariance.
+        normal = (self._LINE6, [_R, _R, _G, _GRAY, _G, _G])
+        degenerate = (self._LINE6, [_GRAY] * 6)
+        solo = IdealCountingObserver(prog_bar=False)(self._make([normal]), return_means=True)
+        mixed = IdealCountingObserver(prog_bar=False)(
+            self._make([degenerate, normal]), return_means=True
+        )
+        for solo_out, mixed_out in zip(solo, mixed, strict=True):
+            assert torch.equal(solo_out[0], mixed_out[1])
 
 
 class TestIdealCountingObserverV2:
