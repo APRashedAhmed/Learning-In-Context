@@ -44,13 +44,17 @@ def _():
 
     matplotlib.use("Agg")  # headless: never reach for a GUI backend
 
+    import json
+    from pathlib import Path
+
     import matplotlib.pyplot as plt
     import numpy as np
     import seaborn as sns
 
+    from learning_in_context.analysis import participants
     from learning_in_context.visualization import cwc_plots, paper_style, transforms
 
-    return cwc_plots, np, paper_style, plt, sns, transforms
+    return Path, cwc_plots, json, np, paper_style, participants, plt, sns, transforms
 
 
 @app.cell
@@ -81,10 +85,6 @@ def _(paper_style):
     # scored on exactly the trials figure 3's participant panels score.
     CWC_DATASET = "participant_dataset"
 
-    # Participants surviving the cohort exclusions. The observer is sampled to a
-    # pool of this size, so a model swarm carries as many points as a human one.
-    NUM_PARTICIPANTS = 78
-
     # Base seed for the observer's response sampling, and for the jitter the
     # raw-point layer draws from numpy's global generator.
     SEED = 0
@@ -104,9 +104,31 @@ def _(paper_style):
         CWC_SWARM_MAX,
         EXEMPLAR_RANK,
         FIGSIZE,
-        NUM_PARTICIPANTS,
         SEED,
     )
+
+
+@app.cell
+def _(Path, json, participants):
+    # Participants surviving the cohort exclusions. The observer is sampled to a
+    # pool of this size, so a model swarm carries as many points as a human one.
+    # Read from the counts artifact — the same source figure 3 sizes its model
+    # pools from — so the two figures cannot drift apart when the participant
+    # pipeline reruns.
+    _counts_path = (
+        Path(__file__).resolve().parents[1]
+        / "data"
+        / "cache"
+        / "participants"
+        / participants.ARTIFACT_COUNTS
+    )
+    assert _counts_path.exists(), (
+        f"participant cohort counts not found at {_counts_path} — run the "
+        "participant_stats pipeline task to produce the participant artifacts "
+        "before rendering figure 2"
+    )
+    NUM_PARTICIPANTS = json.loads(_counts_path.read_text())["final_n"]
+    return (NUM_PARTICIPANTS,)
 
 
 @app.cell
@@ -130,6 +152,22 @@ def _(paper_style, plt, sns):
     # The occluded stretch is drawn as a band behind the curves, echoing the
     # grey occluder the trials themselves show.
     OCCLUSION_SHADE = "0.9"
+
+    def style_gridlines(ax):
+        """Dashed horizontal gridlines behind the marks — the CWC family's reading aid."""
+        ax.yaxis.grid(True, linestyle="--", linewidth=0.7, color="gray", alpha=0.5)
+        ax.set_axisbelow(True)
+
+    def anchor_legend(ax):
+        """Pin the legend to the upper left corner of the axes.
+
+        The renderer places legends automatically, which is data-driven and
+        therefore drifts between panels; pinning it keeps this figure's CWC
+        panel aligned with figure 3's row of the same family.
+        """
+        title = ax.get_legend().get_title().get_text()
+        handles, labels = ax.get_legend_handles_labels()
+        ax.legend(handles, labels, title=title, loc="upper left")
 
     def render_belief_curves(
         df,
@@ -187,7 +225,7 @@ def _(paper_style, plt, sns):
         fig.tight_layout()
         return fig
 
-    return (render_belief_curves,)
+    return anchor_legend, render_belief_curves, style_gridlines
 
 
 @app.cell
@@ -323,12 +361,14 @@ def _(
     CWC_SWARM_MAX,
     FIGSIZE,
     SEED,
+    anchor_legend,
     cwc_plots,
     df_cwc_hz,
     mo,
     np,
     paper_style,
     save_svgs,
+    style_gridlines,
 ):
     def _():
         # seaborn draws the jittered raw-point layer from numpy's global
@@ -342,8 +382,11 @@ def _(
             hue="Hazard Rate",
             hue_order=["Low", "High"],  # light-to-dark, weakest level first
             figsize=FIGSIZE,
+            ylabel="CWC",
             swarm_max=CWC_SWARM_MAX,
         )
+        anchor_legend(_ax)
+        style_gridlines(_ax)
         fig.tight_layout()
         if save_svgs.value:
             paper_style.save_panel(fig, 2, "cwc_hazard_rate")
@@ -365,6 +408,7 @@ def _(
     np,
     paper_style,
     save_svgs,
+    style_gridlines,
 ):
     def _():
         # No `hue`: the x-categories are the contingency levels themselves, so
@@ -377,8 +421,10 @@ def _(
             y="cwc",
             hue_order=["Low", "Medium", "High"],
             figsize=FIGSIZE,
+            ylabel="CWC",
             swarm_max=CWC_SWARM_MAX,
         )
+        style_gridlines(_ax)
         fig.tight_layout()
         if save_svgs.value:
             paper_style.save_panel(fig, 2, "cwc_contingency")

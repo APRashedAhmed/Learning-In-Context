@@ -1855,6 +1855,7 @@ PANEL_TASKS = {
             CONTROL_SAMPLES_MARKER,
             PARTICIPANT_DATASET_MARKER,
             PARTICIPANT_IBO_MARKER,
+            CACHE_DIR / 'participants' / 'participant_counts.json',
         ],
     },
     'fig3': {
