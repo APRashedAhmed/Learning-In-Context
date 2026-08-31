@@ -81,7 +81,7 @@ import pytest
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 FIG5_SCRIPT = REPO_ROOT / "figures" / "fig5_unit_activity.py"
-PANELS_DIR = REPO_ROOT / "outputs" / "panels" / "fig5"
+PANELS_DIR = REPO_ROOT / "figures" / "panels" / "fig5"
 
 EXPECTED_PANELS = [
     # Block 1 — Hazard Rate, color change (deck C/D/E/F)
@@ -112,7 +112,7 @@ def fig5_run(tmp_path_factory):
     tests/test_fig_transforms.py) to an isolated tmp dir so this test proves
     the memoization contract without depending on -- or polluting -- the real
     ``data/cache/fig_transforms``. Panel SVGs, by contrast, are written to
-    the REAL ``outputs/panels/fig5/`` -- that is the actual deliverable this
+    the REAL ``figures/panels/fig5/`` -- that is the actual deliverable this
     script exists to produce (SPEC architecture table), not a test fixture.
     """
     cache_dir = tmp_path_factory.mktemp("fig_transforms_cache")

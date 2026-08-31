@@ -35,7 +35,7 @@ Deviations from the literal DS4 source (deck-verified / ruled):
 Dual use (SPEC rule 7): ``marimo edit figures/fig6_interventions.py`` for
 interactive work; ``python figures/fig6_interventions.py`` runs every cell
 top-to-bottom (via ``app.run()``) and lands the 8 SVGs under
-``outputs/panels/fig6/``.
+``figures/panels/fig6/``.
 """
 
 import marimo

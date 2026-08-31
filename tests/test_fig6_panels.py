@@ -47,7 +47,7 @@ Page 1 is a lettered A + G..N layout:
         from the deck image. This is the ONE title this test asserts must
         differ from the literal deck text.
 
-Panel -> stable semantic SVG name (SPEC rule 5), under ``outputs/panels/fig6/``.
+Panel -> stable semantic SVG name (SPEC rule 5), under ``figures/panels/fig6/``.
 Following the fig5-contract precedent (each deck box = ONE self-contained SVG,
 even where the DS source composes two condition-order subplots -- Low-to-X /
 High-to-X -- sharing a single legend column via ``plot_interventions_rows``'s
@@ -165,7 +165,7 @@ import pytest
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 FIG6_SCRIPT = REPO_ROOT / "figures" / "fig6_interventions.py"
-PANELS_DIR = REPO_ROOT / "outputs" / "panels" / "fig6"
+PANELS_DIR = REPO_ROOT / "figures" / "panels" / "fig6"
 
 EXPECTED_PANELS = [
     "intervention_timecourse_hz_hidden.svg",   # G
@@ -210,7 +210,7 @@ def fig6_run(tmp_path_factory):
     tests/test_fig5_panels.py) to an isolated tmp dir so this test proves the
     memoization contract without depending on -- or polluting -- the real
     ``data/cache/fig_transforms``. Panel SVGs, by contrast, are written to the
-    REAL ``outputs/panels/fig6/`` -- that is the actual deliverable this
+    REAL ``figures/panels/fig6/`` -- that is the actual deliverable this
     script exists to produce (SPEC architecture table), not a test fixture.
 
     fig6 is render-only (SPEC rule 4 -- unlike fig4, it has no tolerated

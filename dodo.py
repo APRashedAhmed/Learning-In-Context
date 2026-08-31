@@ -1814,7 +1814,7 @@ def task_full_pipeline():
 # ============================================================================
 
 FIGURES_SRC_DIR = PROJECT_ROOT / 'figures'
-PANELS_DIR = PROJECT_ROOT / 'outputs' / 'panels'
+PANELS_DIR = PROJECT_ROOT / 'figures' / 'panels'
 PAPER_STYLE_FILE = PROJECT_ROOT / 'src' / 'learning_in_context' / 'visualization' / 'paper_style.py'
 FIG_TRANSFORMS_FILE = PROJECT_ROOT / 'src' / 'learning_in_context' / 'visualization' / 'transforms.py'
 
@@ -1827,7 +1827,7 @@ FIG_TRANSFORMS_FILE = PROJECT_ROOT / 'src' / 'learning_in_context' / 'visualizat
 EXTENDED_DATASET_MARKER = CACHE_DIR / 'model_states' / 'extended_dataset' / 'trial_meta.csv'
 INTERVENTIONS_MARKER = CACHE_DIR / 'interventions' / 'trial_meta.csv'
 
-# name -> (targets relative to outputs/panels/fig<N>/, tier-1 artifact deps)
+# name -> (targets relative to figures/panels/fig<N>/, tier-1 artifact deps)
 PANEL_TASKS = {
     'fig4': {
         'script': FIGURES_SRC_DIR / 'fig4_identifying_units.py',

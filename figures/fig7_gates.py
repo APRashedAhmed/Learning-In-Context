@@ -43,7 +43,7 @@ one self-contained SVG via ``save_panel`` (SPEC rule 1).
 
 Dual use (SPEC rule 7): ``marimo edit figures/fig7_gates.py`` for interactive
 work; ``python figures/fig7_gates.py`` runs every cell top-to-bottom and lands
-the 4 SVGs under ``outputs/panels/fig7/``.
+the 4 SVGs under ``figures/panels/fig7/``.
 """
 
 import marimo

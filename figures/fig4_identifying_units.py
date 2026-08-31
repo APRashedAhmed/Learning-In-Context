@@ -14,7 +14,7 @@ A/D/G are hand-drawn Illustrator schematics, EXCLUDED per the fig4 contract):
 Dual use (SPEC rule 7): ``marimo edit figures/fig4_identifying_units.py`` for
 interactive work; ``python figures/fig4_identifying_units.py`` runs every cell
 top-to-bottom (via ``app.run()``) and lands the 4 SVGs under
-``outputs/panels/fig4/``.
+``figures/panels/fig4/``.
 
 Two deliberate, documented deviations from the DS2 source
 ---------------------------------------------------------

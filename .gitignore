@@ -44,3 +44,6 @@ outputs/
 
 # Backups
 *.toml~
+
+# Rendered figure panels (regenerate via `doit panels`)
+figures/panels/

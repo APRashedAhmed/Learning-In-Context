@@ -20,7 +20,7 @@ unlettered scatter plots directly below them:
       REUSED cell-unit interventions panel (SPEC ruling 10 / fig7 mapping
       row) -- same rendered content as fig6's "All Models Cell Unit
       Interventions" panel (SPEC ruling 9), but exported into fig7's own
-      ``outputs/panels/fig7/`` namespace per rule 5 (panel paths are
+      ``figures/panels/fig7/`` namespace per rule 5 (panel paths are
       per-figure). RENDERED -> IN.
   B, right - "All Models (i, f) Gate\\nRescue Interventions" point plot. Same
       axes/legend shape as B-left (Alpha vs P(Final Color Change), Type:
@@ -43,7 +43,7 @@ unlettered scatter plots directly below them:
       Blue/Green/Red/Unity legend, aggregated (mean) across each model's
       critical units within each (color_entered, model) pair. RENDERED -> IN.
 
-Panel -> stable semantic SVG name (SPEC rule 5), under ``outputs/panels/fig7/``:
+Panel -> stable semantic SVG name (SPEC rule 5), under ``figures/panels/fig7/``:
   B, left      -> cell_unit_interventions_all_models.svg
   B, right     -> gate_rescue_input_forget.svg
   bottom-left  -> gate_scatter_delta_forget_input.svg
@@ -171,7 +171,7 @@ import pytest
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 FIG7_SCRIPT = REPO_ROOT / "figures" / "fig7_gates.py"
-PANELS_DIR = REPO_ROOT / "outputs" / "panels" / "fig7"
+PANELS_DIR = REPO_ROOT / "figures" / "panels" / "fig7"
 
 EXPECTED_PANELS = [
     "cell_unit_interventions_all_models.svg",       # B, left (reused from fig6)
@@ -206,7 +206,7 @@ def fig7_run(tmp_path_factory):
     tests/test_fig5_panels.py) to an isolated tmp dir so this test proves the
     memoization contract (SPEC rule 8) without depending on -- or polluting --
     the real ``data/cache/fig_transforms``. Panel SVGs, by contrast, are
-    written to the REAL ``outputs/panels/fig7/`` -- that is the actual
+    written to the REAL ``figures/panels/fig7/`` -- that is the actual
     deliverable this script exists to produce (SPEC architecture table), not
     a test fixture.
     """

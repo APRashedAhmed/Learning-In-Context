@@ -79,7 +79,7 @@ class TestPanelsTaskGraph:
         assert result.returncode == 0, result.stderr
         info = result.stdout
 
-        out_dir = REPO_ROOT / "outputs" / "panels" / fig_name
+        out_dir = REPO_ROOT / "figures" / "panels" / fig_name
         for panel_name in EXPECTED_TARGETS[fig_name]:
             expected_target = str(out_dir / panel_name)
             assert expected_target in info, (

@@ -39,7 +39,7 @@ bottom, left column then right column:
       betas to identify pairs": hand-drawn placeholder box, identical text to
       D. EXCLUDED.
 
-Panel -> stable semantic SVG name (SPEC rule 5), under ``outputs/panels/fig4/``:
+Panel -> stable semantic SVG name (SPEC rule 5), under ``figures/panels/fig4/``:
   B -> score_curves_hazard_rate.svg
   C -> coef_heatmap_hazard_rate.svg
   E -> score_curves_contingency.svg
@@ -125,7 +125,7 @@ import pytest
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 FIG4_SCRIPT = REPO_ROOT / "figures" / "fig4_identifying_units.py"
-PANELS_DIR = REPO_ROOT / "outputs" / "panels" / "fig4"
+PANELS_DIR = REPO_ROOT / "figures" / "panels" / "fig4"
 
 EXPECTED_PANELS = [
     "score_curves_hazard_rate.svg",   # B
@@ -156,7 +156,7 @@ def fig4_run(tmp_path_factory):
     tests/test_fig_transforms.py and tests/test_fig5_panels.py) to an isolated
     tmp dir so this test proves the memoization contract without depending on
     -- or polluting -- the real ``data/cache/fig_transforms``. Panel SVGs, by
-    contrast, are written to the REAL ``outputs/panels/fig4/`` -- that is the
+    contrast, are written to the REAL ``figures/panels/fig4/`` -- that is the
     actual deliverable this script exists to produce (SPEC architecture
     table), not a test fixture.
 

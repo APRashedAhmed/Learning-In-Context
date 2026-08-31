@@ -24,7 +24,7 @@ Twelve panels (page-1 scope of the fig5 deck; VERIFIER RULING in
 Dual use (SPEC rule 7): ``marimo edit figures/fig5_unit_activity.py`` for
 interactive work; ``python figures/fig5_unit_activity.py`` runs every cell
 top-to-bottom (via ``app.run()``) and lands the 12 SVGs under
-``outputs/panels/fig5/``.
+``figures/panels/fig5/``.
 
 Note (deviation from literal source; deck-verified): the contingency-block
 profile scatters in ``fig_contingency_activity.py`` reference

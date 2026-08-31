@@ -71,7 +71,7 @@ def get_color_palette(columns, color_number_tup, linspace_range=(0.5, 1), linspa
 
 # Repo root (this file lives at src/learning_in_context/visualization/).
 _REPO_ROOT = Path(__file__).resolve().parents[3]
-PANELS_DIR = _REPO_ROOT / "outputs" / "panels"
+PANELS_DIR = _REPO_ROOT / "figures" / "panels"
 
 
 def _register_fonts() -> None:
@@ -105,7 +105,7 @@ def apply_style() -> None:
 
 
 def save_panel(fig, fig_no: int | str, name: str) -> Path:
-    """Export one panel as live-text SVG to ``outputs/panels/fig<N>/<name>.svg``.
+    """Export one panel as live-text SVG to ``figures/panels/fig<N>/<name>.svg``.
 
     Panel names are stable identifiers — Illustrator compositions link to these
     paths, so never rename an existing output (SPEC rule 5).

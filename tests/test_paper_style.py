@@ -93,7 +93,7 @@ class TestSizeVocabulary:
 
 
 class TestSavePanel:
-    """save_panel(fig, fig_no, name) writes outputs/panels/fig<N>/<name>.svg."""
+    """save_panel(fig, fig_no, name) writes figures/panels/fig<N>/<name>.svg."""
 
     @pytest.fixture(autouse=True)
     def _apply_style_first(self):
@@ -151,4 +151,4 @@ class TestSavePanel:
         # PANELS_DIR must point at the isolated tmp_path, never the real repo.
         assert "tmp" in str(paper_style.PANELS_DIR) or not str(
             paper_style.PANELS_DIR
-        ).startswith(str(paper_style._REPO_ROOT / "outputs"))
+        ).startswith(str(paper_style._REPO_ROOT / "figures"))
