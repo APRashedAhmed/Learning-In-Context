@@ -559,72 +559,110 @@ class IdealCountingObserver(IdealObserverModel):
         color_diff = colors_inferred[:, 1:, :] - colors_inferred[:, :-1, :]
         color_change = color_diff.abs().max(dim=-1)[0].to(bool)
 
-        # Color changes that coincide with a bounce that are not immediately
-        # following the grayzone
-        self.color_change_bounce = torch.logical_and(
-            torch.logical_and(
-                self.velocity_change,
-                color_change[:, 1:],
-            ),
-            ~mask_idx_after_grayzone[:, 1:],
+        # ------------------------------------------------------------------
+        # ICO-A fix: put every (B, T-2) event mask in ONE index space.
+        #
+        # Index conventions in this method:
+        #   ``velocity_change[j]``          -- a velocity change AT frame j+1
+        #       (the second difference of positions j..j+2, hence centred on
+        #       j+1; that is also why it pairs with ``positions_oob[:, 1:-1]``)
+        #   ``color_change[j]``             -- a colour change ARRIVING at frame
+        #       j+1 (the difference of frames j and j+1)
+        #   ``mask_grayzone[j]``            -- frame j is occluded
+        #   ``mask_idx_after_grayzone[j]``  -- frame j+1 is a grayzone EXIT frame
+        #
+        # The old code gated ``velocity_change[j]`` (frame j+1) against
+        # ``color_change[:, 1:][j]`` (frame j+2), a +1 skew: a colour change at
+        # the bounce frame itself -- the task's convention, and what every
+        # fixture in the suite declares -- could NEVER be credited to its bounce.
+        # The conjunction was identically zero, so the bounce was counted as a
+        # pccovc FAILURE while its own colour change was misfiled one cell
+        # earlier as a pccnvc (random-channel) success.
+        # The grayzone path was self-consistent only by accident: the
+        # ``velocity_change_*_shifted`` plant below deliberately dropped the
+        # run's aggregate one cell EARLY so that, read in the colour array's
+        # frame-(j+2) space, it met the exit-frame colour change.
+        #
+        # Everything is therefore re-sliced onto the velocity/event space,
+        # index j <-> frame j+1, width T-2 (shapes are unchanged, so
+        # ``get_dist_params``' offset=2 head duplication still yields width T
+        # rate curves and the belief loop's ``means_*[:, t]`` indexing is
+        # untouched).
+        color_change_at_event = color_change[:, :-1]  # colour change at frame j+1
+        mask_grayzone_at_event = mask_grayzone[:, 1:-1]  # frame j+1 is occluded
+        mask_exit_at_event = mask_idx_after_grayzone[:, :-1]  # frame j+1 is an exit
+        # Edge cost of keeping the width at T-2: the grid spans frames 1..T-2,
+        # so the colour change arriving at the LAST frame now has no cell
+        # (pre-fix it was the change arriving at frame 1 that had none). Neither
+        # boundary frame can carry a detected velocity change either -- the
+        # second difference needs a neighbour on both sides -- so no bounce /
+        # colour PAIR is lost, only an unpairable boundary colour change.
+        # ------------------------------------------------------------------
+
+        # Color changes that coincide with a velocity change, excluding the
+        # grayzone exit frame (attributed per-run below instead)
+        self.color_change_bounce = (
+            self.velocity_change & color_change_at_event & ~mask_exit_at_event
         ).float()
 
-        # Color changes that happen when there isnt a bounce that dont happen
-        # immediately after exiting the grayzone
-        self.color_change_random = torch.logical_and(
-            ~self.velocity_change & color_change[:, 1:],
-            ~mask_idx_after_grayzone[:, 1:],
+        # Color changes that happen when there isnt a velocity change and that
+        # dont happen immediately after exiting the grayzone
+        self.color_change_random = (
+            ~self.velocity_change & color_change_at_event & ~mask_exit_at_event
         ).float()
 
         # Handle grayzone changes
-        color_change_grayzone = torch.logical_and(
-            color_change[:, 1:],
-            mask_idx_after_grayzone[:, 1:],
-        )
+        color_change_grayzone = color_change_at_event & mask_exit_at_event
 
         # DRIFT-1 fix: attribute a velocity change to the run it happened IN.
-        # Index conventions in this method: ``velocity_change_*[j]`` is a change
-        # AT frame j+1 (the second difference of positions j..j+2), whereas
-        # ``mask_grayzone[:, 2:][j]`` -- the run mask -- is frame j+2. The old
-        # gate ``velocity_change_*[j] & mask_grayzone[:, 2:][j]`` therefore read
-        # "vc at frame i AND frame i+1 gray", i.e. the window [s-1, e-1]: it
+        # The old gate ``velocity_change_*[j] & mask_grayzone[:, 2:][j]`` read
+        # "vc at frame j+1 AND frame j+2 gray", i.e. the window [s-1, e-1]: it
         # stole a vc on the last VISIBLE frame before entry and dropped the one
         # on the last HIDDEN frame e. The SPEC (design doc, "The causal rule")
         # is [s, e].
         # The fix lifts the flags into ABSOLUTE frame space (index == frame; the
         # first and last frames are never a detected change, since the second
         # difference needs a neighbour on both sides) and gates on the SAME
-        # frame, then re-slices at [:, 2:] so the change mask shares the index
-        # space of ``mask_run``. Sharing that index space is what makes the
-        # window exactly [s, e]: ``find_overlapping_grayzone`` only advances
-        # ``seen`` while ``mask_run[j]`` is True, i.e. over j in [s-2, e-2] <->
-        # frames [s, e]. NB gating with ``mask_grayzone[:, 1:-1]`` instead --
-        # right condition, wrong index space -- would leave the change for frame
-        # e sitting on the exit cell where ``seen`` no longer accumulates,
-        # yielding [s, e-1] and, on a length-1 run (s == e), an EMPTY window.
-        # KNOWN LIMITATION (pre-existing, not introduced here): ``mask_run`` is
-        # the ``[:, 2:]`` slice, so frames 0 and 1 have no cell at all and the
-        # realised window is [max(s, 2), e]. A run opening at frame 0 or 1 is
-        # attributable only from frame 2 on -- the one place this is narrower
-        # than the SPEC, and than the old gate (which reached frame 1 via j=0).
-        # ``mask_cells`` and ``mask_run`` are untouched; so are the public
-        # ``self.velocity_change_*`` attributes (the builder-validation tests
-        # assert on them directly) -- these are locals.
+        # frame, then re-slices into the event space (index j <-> frame j+1) so
+        # the change mask shares the index space of ``mask_run``. Sharing that
+        # index space is what makes the window exactly [s, e]:
+        # ``find_overlapping_grayzone`` only advances ``seen`` while
+        # ``mask_run[j]`` is True, i.e. over j in [s-1, e-1] <-> frames [s, e].
+        # ICO-A: the run/cell/exit masks moved from the old ``[:, 2:]``
+        # frame-(j+2) space into the event space along with the colour arrays,
+        # so ``mask_cells`` and the plant below now sit on the exit cell
+        # j = e <-> frame e+1 rather than j = e-1. The window RULE (attribute a
+        # vc to the run it happened in, [s, e]) is unchanged; only its index
+        # space, and the clipping at each edge, move by one frame.
+        # KNOWN LIMITATION: ``mask_run`` spans frames 1..T-2, so the realised
+        # window is [max(s, 1), min(e, T-2)] -- pre-ICO-A it was [max(s, 2), e].
+        # This BUYS one frame at the head and COSTS one at the tail: a run whose
+        # exit frame is T-1 has no representable exit cell (the old
+        # ``mask_idx_after_grayzone[:, 1:]`` slice did reach it), so its
+        # aggregate is stripped from the run and never replanted, and the exit
+        # colour change has no cell either. That is a real behaviour change at
+        # the tail edge, not a pre-existing one. It is NOT guarded, deliberately:
+        # deciding whether to strip a vc on the basis of whether its run will
+        # later exit would make the strip depend on the future, which is exactly
+        # the non-causality E3 removed. The observer that never sees an outcome
+        # within the sequence may not count the trial.
+        # ``self.velocity_change_*`` (the public attributes the
+        # builder-validation tests assert on) stay untouched -- these are locals.
         velocity_change_bounce_at_frame = torch.zeros_like(mask_grayzone)
         velocity_change_bounce_at_frame[:, 1:-1] = self.velocity_change_bounce
         velocity_change_random_at_frame = torch.zeros_like(mask_grayzone)
         velocity_change_random_at_frame[:, 1:-1] = self.velocity_change_random
 
         mask_grayzone_with_velocity_change_bounce = self.find_overlapping_grayzone(
-            mask_grayzone[:, 2:] | mask_idx_after_grayzone[:, 1:],
-            (velocity_change_bounce_at_frame & mask_grayzone)[:, 2:],
-            mask_grayzone[:, 2:],
+            mask_grayzone_at_event | mask_exit_at_event,
+            (velocity_change_bounce_at_frame & mask_grayzone)[:, 1:-1],
+            mask_grayzone_at_event,
         )
 
         mask_grayzone_with_velocity_change_random = self.find_overlapping_grayzone(
-            mask_grayzone[:, 2:] | mask_idx_after_grayzone[:, 1:],
-            (velocity_change_random_at_frame & mask_grayzone)[:, 2:],
-            mask_grayzone[:, 2:],
+            mask_grayzone_at_event | mask_exit_at_event,
+            (velocity_change_random_at_frame & mask_grayzone)[:, 1:-1],
+            mask_grayzone_at_event,
         )
 
         mask_grayzone_with_velocity_change = torch.logical_or(
@@ -641,44 +679,66 @@ class IdealCountingObserver(IdealObserverModel):
         # Add those to random color changes
         self.color_change_random += mask_color_changes_with_no_grayzone_velocity_change.float()
 
-        # #
-        # # Need to handle color changes in the grayzone where the velocity
-        # # changes as well
-        # #
-        # mask_color_changes_with_grayzone_velocity_change = torch.logical_and(
-        #     color_change_grayzone,
-        #     mask_grayzone_with_velocity_change,
-        # )
-        # self.color_change_random += mask_color_changes_with_grayzone_velocity_change
-        # self.color_change_bounce += mask_color_changes_with_grayzone_velocity_change
+        # ICO-B fix: the complementary branch was dead (commented out), so an
+        # exit colour change that a run's velocity change DOES explain was
+        # removed from ``color_change_random`` by the line above and then added
+        # nowhere. Since the plant below still marks the exit cell in
+        # ``velocity_change_*_shifted``, the cell entered the pccovc pair as
+        # ``velocity_change_shifted & ~color_change_bounce`` -- a silent FAILURE
+        # for a trial whose colour demonstrably DID change.
+        #
+        # It is credited to the contingent (pccovc) channel, matching how a
+        # VISIBLE velocity change with a coincident colour change is counted:
+        # ``self.color_change_bounce`` above gates on ``self.velocity_change``,
+        # which is bounce OR random -- and so does the model's own transition
+        # matrix (``T``: ``vc = p_bounce + pvc * (1 - p_bounce)``;
+        # ``p_transition = pccnvc * (1 - vc) + pccovc * vc``). So "bounce" here
+        # means "on a velocity change", and occluding an event must not move it
+        # to a different channel.
+        # NB the design doc's causal rule says "...to the random channel if a
+        # velocity_change_random occurred there". Taken literally that is
+        # incoherent with the machinery around it: the random plant below sets
+        # ``velocity_change_random_shifted`` at the SAME exit cell, so routing
+        # the success to ``color_change_random`` would make one cell a pccnvc
+        # success with no matching pccnvc opportunity (``~velocity_change_shifted``
+        # is False there) AND a pccovc failure at the same time. Flagged for a
+        # model-owner ruling; the single ``mask_grayzone_with_velocity_change``
+        # below is the one line to change if the literal split is wanted.
+        mask_color_changes_with_grayzone_velocity_change = torch.logical_and(
+            color_change_grayzone,
+            mask_grayzone_with_velocity_change,
+        )
+        self.color_change_bounce += mask_color_changes_with_grayzone_velocity_change.float()
 
         # Make a new change array that shifts grayzone velocity changes to be the
         # index after the grayzone so that color counts are updated properly
         # DRIFT-1 fix (second half): the strip must only remove flags for HIDDEN
-        # frames. ``velocity_change_*_shifted[j]`` is a change at frame j+1,
-        # while the overlap mask spans run cells + exit cell, j in [s-2, e-1] <->
-        # frames [s-1, e]. Stripping on the bare overlap therefore deleted a vc
-        # on frame s-1 -- the last VISIBLE frame before entry, which the observer
-        # saw with its own eyes -- and relocated it to the exit. Gating with
-        # ``mask_grayzone[:, 1:-1]`` ("frame j+1 is gray") clips the strip to
-        # frames [s, e] <-> j in [s-1, e-1], so frame s-1 keeps its own flag.
-        # The exit cell j = e-1 is then re-set True, carrying the run's aggregate
-        # to the index that pairs with the exit-frame colour change.
+        # frames. In the event space the overlap mask spans run cells + exit
+        # cell, j in [s-1, e] <-> frames [s, e+1]. Stripping on the bare overlap
+        # would therefore delete the exit frame's own flag; gating with
+        # ``mask_grayzone_at_event`` ("frame j+1 is gray") clips the strip to
+        # frames [s, e] <-> j in [s-1, e-1]. A vc on frame s-1 -- the last
+        # VISIBLE frame before entry, which the observer saw with its own eyes --
+        # has no overlap cell at all and keeps its own flag either way.
+        # The exit cell j = e is then re-set True, carrying the run's aggregate
+        # to the index that pairs with the exit-frame colour change (ICO-A: that
+        # cell is now j = e <-> frame e+1, the exit frame itself, instead of the
+        # frame-(j+2)-space cell j = e-1 the pre-fix code planted on).
         self.velocity_change_bounce_shifted = self.velocity_change_bounce.clone()
 
         self.velocity_change_bounce_shifted[
-            mask_grayzone_with_velocity_change_bounce & mask_grayzone[:, 1:-1]
+            mask_grayzone_with_velocity_change_bounce & mask_grayzone_at_event
         ] = False
         self.velocity_change_bounce_shifted[
-            mask_grayzone_with_velocity_change_bounce & mask_idx_after_grayzone[:, 1:]
+            mask_grayzone_with_velocity_change_bounce & mask_exit_at_event
         ] = True
 
         self.velocity_change_random_shifted = self.velocity_change_random.clone()
         self.velocity_change_random_shifted[
-            mask_grayzone_with_velocity_change_random & mask_grayzone[:, 1:-1]
+            mask_grayzone_with_velocity_change_random & mask_grayzone_at_event
         ] = False
         self.velocity_change_random_shifted[
-            mask_grayzone_with_velocity_change_random & mask_idx_after_grayzone[:, 1:]
+            mask_grayzone_with_velocity_change_random & mask_exit_at_event
         ] = True
 
         self.velocity_change_shifted = torch.logical_or(

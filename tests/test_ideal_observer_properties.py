@@ -9,15 +9,16 @@ NB the current IdealCountingObserver crashes (`ValueError: max() arg is an empty
 sequence`) on any batch with ZERO grayzone frames (Tier-3, deferred), so every
 ICO-fed batch below carries at least one occluded frame in some row.
 
-OPEN (B1 builder fix): defect B1 in `tests/ideal_observer_builders.py` — a wall
-relocation that was itself a second-difference kink, so the models scored an
-undeclared extra bounce — is fixed. The fix removed a phantom bounce from
-`_AGREEMENT_SCRIPT` / `_EQUIV_SCRIPT` and, with it, the ICO/V2 agreement that
-cell #10 (C11) asserted. **C11 is currently UNCOVERED**: see
-`test_ico_v2_agreement` for the hand derivation of the new values and for the
-model-side off-by-one (ICO pairs `velocity_change[k]`, centred on position k+1,
-with the colour change arriving at position k+2) that the phantom had been
-masking. Both need a disposition from the model owner.
+OPEN (C11 agreement): the model-side off-by-one that the B1 builder fix exposed —
+ICO paired `velocity_change[k]` (centred on position k+1) with the colour change
+arriving at position k+2 — is FIXED (ICO-A), together with the dead
+explained-exit-change branch (ICO-B). ICO and V2 now agree on the underlying
+event tally for `_AGREEMENT_SCRIPT` (0 contingent failures, 1 contingent
+success), but their posterior means still differ: ICO's `get_dist_params` runs
+with `offset=2`, which DUPLICATES rows 0 and 1 of every count vector, and this
+script's only event sits at index 1. **C11 therefore remains UNCOVERED**, now
+for a single, precisely-named reason — defect E5, ruled an accident and kept
+inert/deferred by the PI (design doc, Q5). See `test_ico_v2_agreement`.
 """
 
 import pytest
@@ -627,43 +628,63 @@ class TestBugLedger:
         # would be a finding, not a regression of this cell.
         #
         # ############################################################
-        # DISPOSITION SUPERSEDED (B1 builder fix). AGREEMENT NO LONGER
-        # HOLDS ON THIS SCRIPT, so C11 is currently UNCOVERED by the suite.
-        # The values below are hand-derived pending empirical confirmation.
+        # DISPOSITION SUPERSEDED TWICE.
+        #   (a) B1 builder fix: agreement broke, and the cell was pinned at
+        #       ICO 0.25 / V2 2/3 while the model-side off-by-one it exposed
+        #       awaited a ruling.
+        #   (b) ICO-A + ICO-B (this work): the off-by-one is FIXED. Agreement is
+        #       STILL NOT restored, so C11 stays UNCOVERED — but the residual
+        #       gap now has one named cause (E5, deferred), not an unexplained
+        #       misalignment. The values below are hand-derived pending
+        #       empirical confirmation.
         # ############################################################
         #
-        # WHY the 0.5/0.5 agreement was an artefact. Pre-fix, the builder's
-        # relocation jump made velocity_change = [T, T, F, F, F] — a PHANTOM
-        # bounce at velocity index 0 on top of the one declared at index 1.
-        # ICO pairs velocity_change[k] (centred on position index k+1) with
-        # color_change[:, 1:][k] (the colour change ARRIVING at position k+2) —
-        # a +1 misalignment in the MODEL, not the builder. The declared
-        # bounce-coincident colour change (colour 0 -> 1, arriving at position
-        # index 2) therefore sits at color_change[:, 1:][0], and only the
-        # phantom bounce at velocity index 0 could ever meet it. Removing the
-        # phantom leaves color_change_bounce identically zero.
-        #   => MODEL-SIDE FINDING for the model owner (src/ is not editable
-        #      here): ICO's velocity/colour pairing is off by one frame.
+        # WHY the original 0.5/0.5 agreement was an artefact. Pre-B1-fix, the
+        # builder's relocation jump made velocity_change = [T, T, F, F, F] — a
+        # PHANTOM bounce at velocity index 0 on top of the one declared at index
+        # 1 — and ICO paired velocity_change[k] (centred on position index k+1)
+        # with color_change[:, 1:][k] (the change ARRIVING at position k+2). The
+        # declared bounce-coincident colour change (0 -> 1, arriving at position
+        # index 2) therefore sat at color_change[:, 1:][0], where only the
+        # phantom could meet it. Removing the phantom left color_change_bounce
+        # identically zero; ICO-A removes the +1 skew instead.
         #
-        # Hand derivation on the fixed trajectory
+        # Hand derivation on the fixed trajectory and the fixed model.
         # x = [244, 248, 252, 244, 236, 228, 220] (see the builder-validation
         # cell above): velocity_change = [F, T, F, F, F], oob[1:-1] =
         # [T, T, F, F, F], bounce = [F, T, F, F, F], random = [F]*5.
         #
         # ICO means_pccovc. colours_inferred = [R, R, G, G, G, B, B] (the
-        # grayzone at index 4 forward-fills to G), so
-        #   color_change            = [F, T, F, F, T, F]
-        #   color_change[:, 1:]     = [T, F, F, T, F]
-        #   mask_idx_after_grayzone[:, 1:] = [F, F, F, T, F]
-        #   color_change_bounce = (vc & cc[1:]) & ~miag[1:] = [0, 0, 0, 0, 0]
+        # grayzone at index 4 forward-fills to G). Post-ICO-A every (B, T-2)
+        # mask lives in the event space, index j <-> frame j+1:
+        #   color_change              = [F, T, F, F, T, F]
+        #   color_change[:, :-1]      = [F, T, F, F, T]   (j=1 <-> frame 2,
+        #                                                  j=4 <-> frame 5)
+        #   mask_idx_after_grayzone[:, :-1] = [F, F, F, F, T]  (exit frame 5)
+        #   color_change_bounce = vc & cc & ~exit          = [0, 1, 0, 0, 0]
+        #   color_change_random = ~vc & cc & ~exit         = [0, 0, 0, 0, 0]
+        #     (the exit-frame change at j=4 has no in-run vc to explain it —
+        #      the run [4, 4] carries none — so it joins the RANDOM channel via
+        #      the grayzone path, not the contingent one)
         #   velocity_change_shifted = [F, T, F, F, F] (no grayzone overlap)
-        # pccovc pair = (vcs & ~ccb, ccb) = ([0,1,0,0,0], [0,0,0,0,0]); the
+        # pccovc pair = (vcs & ~ccb, ccb) = ([0,0,0,0,0], [0,1,0,0,0]); the
         # Dirichlet counts prepend rows 0-1, giving the 7-row sequence
-        #   [(0,0), (1,0), (0,0), (1,0), (0,0), (0,0), (0,0)]
-        # whose cumulative sum at the last row is (2, 0), so
-        #   m_ovc[-1] = (1 + 0) / (1 + 1 + 2 + 0) = 1/4 = 0.25.
-        # (Pre-fix the same arithmetic gave (2, 2) -> 3/6 = 0.5, reproducing
-        # the documented value — which is what validates this method.)
+        #   [(0,0), (0,1), (0,0), (0,1), (0,0), (0,0), (0,0)]
+        # whose cumulative sum at the last row is (0, 2), so
+        #   m_ovc[-1] = (1 + 2) / (1 + 1 + 0 + 2) = 3/4 = 0.75.
+        # (The same arithmetic reproduces the two previously documented values —
+        # pre-B1 (2, 2) -> 0.5, post-B1 (2, 0) -> 0.25 — which validates it.)
+        #
+        # WHY THEY STILL DIVERGE, exactly. Both estimators now see the SAME
+        # contingent tally on this script: one trial, one success, zero
+        # failures. V2 banks it once -> (alpha_cont, beta_cont) = (2, 1) ->
+        # 2/3. ICO's get_dist_params runs with offset=2, which prepends a COPY
+        # of count rows 0 and 1 before the cumulative sum; this script's only
+        # event sits at row 1, so ICO banks it TWICE -> (0, 2) -> 3/4. Drop the
+        # duplication and ICO would read (0, 1) -> (1+1)/(1+1+0+1) = 2/3,
+        # agreeing exactly. The head duplication is defect E5, ruled an
+        # accident and kept inert/deferred (design doc, Q5) — so this cell
+        # pins the divergence AND its single remaining cause.
         #
         # V2 cont. bounce[:, 1:-1] = oob[1:-1] & vc = [F, T, F, F, F], so the
         # ONLY bounce frame is t = 2 (pre-fix t = 1 and t = 2 both bounced).
@@ -681,12 +702,25 @@ class TestBugLedger:
         _, _, m_ovc, _ = ico(samples, return_means=True)
         out = IdealCountingObserverV2()(samples, return_means=True)
         a_cont, b_cont = out["betas"][0, 2], out["betas"][0, 3]
-        assert torch.isclose(m_ovc[0, -1], torch.tensor(0.25), atol=1e-4)
+        assert torch.isclose(m_ovc[0, -1], torch.tensor(0.75), atol=1e-4)
         assert torch.isclose(a_cont / (a_cont + b_cont), torch.tensor(2.0 / 3.0), atol=1e-4)
         # Pin the DIVERGENCE too, so a later change that restores agreement here
         # fails loudly and forces this cell to be re-dispositioned rather than
         # quietly re-acquiring a property nobody re-derived.
         assert not torch.isclose(m_ovc[0, -1], a_cont / (a_cont + b_cont), atol=1e-4)
+        # ... and pin the ATTRIBUTED CAUSE, so E5's eventual fix flips this cell
+        # rather than silently shifting the gap onto something else.
+        # `counts_pccovc` is the (B, T, 2) CUMULATIVE sum of
+        #   [row_0, row_1, row_0, row_1, ..., row_{T-3}]
+        # so its slot at index 1 is exactly the duplicated head (row_0 + row_1)
+        # and `counts[-1] - counts[1]` is the honest, once-counted tally.
+        # Subtract the duplication and ICO reproduces V2's contingent mean.
+        counts = ico.counts_pccovc[0]
+        assert counts[-1].tolist() == [0.0, 2.0]  # one event, banked twice
+        failures, successes = (counts[-1] - counts[1]).tolist()
+        assert (failures, successes) == (0.0, 1.0)
+        unduplicated = (1 + successes) / (1 + 1 + failures + successes)
+        assert torch.isclose(torch.tensor(unduplicated), a_cont / (a_cont + b_cont), atol=1e-4)
 
 
 class TestV2OcclusionAndMutation:

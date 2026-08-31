@@ -144,41 +144,70 @@ class TestIdealCountingObserver:
     def test_bounce_contingent_channel_is_exercised(self, samples):
         # seq0 has an OOB bounce with a coincident color change, so its pccovc
         # estimate must move off the (1, 1) prior mean of 0.5.
-        # NB the channel is exercised through its FAILURE count, not its success
-        # count: `color_change_bounce` is all-zero here because the pairing is
-        # itself skewed by one -- `velocity_change[j]` is frame j+1 while
-        # `color_change[:, 1:][j]` is frame j+2, so a genuinely coincident
-        # bounce+colour change never lands in the same slot. That skew is a
-        # separate, pre-existing defect (out of scope for DRIFT-1, which only
-        # moves the GRAYZONE attribution window).
+        # ICO-A: the channel is now exercised through its SUCCESS count. Before
+        # the fix `color_change_bounce` was all-zero and the estimate moved only
+        # via the failure count (the pairing was skewed by one --
+        # `velocity_change[j]` is frame j+1 while `color_change[:, 1:][j]` was
+        # frame j+2, so a genuinely coincident bounce+colour change could never
+        # land in the same slot). The estimate therefore moves the OTHER WAY
+        # now: 0.25 (pure failure) -> 0.75 (pure success).
         ico = IdealCountingObserver(prog_bar=False)
         _, _, m_ovc, _ = ico(samples, return_means=True)
         assert not torch.isclose(m_ovc[0, -1], torch.tensor(0.5), atol=ATOL)
+        assert m_ovc[0, -1] > 0.5
 
     def test_golden_final_outputs(self, samples):
         ico = IdealCountingObserver(prog_bar=False)
         beliefs, m_nvc, m_ovc, m_pvc = ico(samples, return_means=True)
-        assert torch.allclose(
-            beliefs[:, -1],
-            torch.tensor([[0.236345, 0.0, 0.763655], [1 / 3, 1 / 3, 1 / 3]]),
-            atol=ATOL,
-        )
-        # DRIFT-1 (attribution window [s-1, e-1] -> the SPEC's [s, e]) moves seq1
-        # ONLY. HAND-DERIVED (pending empirical confirmation):
-        #   seq0 grayzone run [4, 6]; its only vc is the bounce at frame 2, which
-        #     is outside BOTH the old window [3, 5] and the new [4, 6] -- so seq0
-        #     is untouched (beliefs and all three rates unchanged).
-        #   seq1 grayzone run [3, 4]; its only vc is the bounce at frame 2, which
-        #     WAS inside the old window [2, 3] and is NOT inside the new [3, 4].
-        #     The spurious attribution is gone, so the bounce keeps its own index
-        #     instead of being relocated to the exit cell:
-        #     velocity_change_shifted moves from j=3 to j=1. With the offset=2
-        #     head duplication in get_dist_params that flips the counts to
-        #       pccnvc (12, 4) -> mean 5/18,  pccovc (2, 0) -> mean 1/4.
+        # ICO-A (bounce/colour pairing skew) re-baselines BOTH rows. HAND-DERIVED
+        # (pending empirical confirmation). Common index convention: every
+        # (B, T-2) event mask now lives in the event space, index j <-> frame j+1.
+        #
+        # seq0: x = [232, 240, 248, 240, ...] -> oob at frame 2 only,
+        #   velocity_change = [F, T, F, ...] (j=1 <-> frame 2) and that vc is a
+        #   BOUNCE. colours [R, R, G, G, GRAY x3, B x7] forward-fill to
+        #   [R, R, G, G, G, G, G, B, ...], so color_change (j <-> frame j+1) is
+        #   True at j=1 (frame 2) and j=6 (frame 7, the grayzone exit).
+        #     color_change_bounce = vc & cc & ~exit -> {j=1}   (was EMPTY: the
+        #       frame-2 change used to be read one cell early, at old-space j=0,
+        #       and misfiled as a random-channel success -- and j=0 is one of the
+        #       two rows the head duplication copies, so it supplied 2 of the 3
+        #       successes behind the old 4/17)
+        #     color_change_random = {j=6} only, via the exit path (the run
+        #       [4, 6] carries no vc, so the exit change stays random)
+        #     velocity_change_shifted = {j=1}
+        #   pccnvc pair (~vcs, ccr): the offset=2 head duplication prepends rows
+        #     j=0, j=1, so counts = (1 + 11, 0 + 1) = (12, 1) -> 2/15
+        #     (was (12, 3) -> 4/17).
+        #   pccovc pair (vcs & ~ccb, ccb): j=1 is now a SUCCESS, so slot 0 is
+        #     empty and the duplicated row j=1 counts it twice:
+        #     (0, 2) -> 3/4 (was (2, 0) -> 1/4).
+        #   pvc pair is built from the UNSHIFTED detectors -> unchanged, 1/14.
+        #   beliefs[0, -1]: frame 13 is visible blue -> [0, 0, 1], propagated one
+        #     step. probability_bounce = 0, so vc = pvc = 1/14 and
+        #     p_transition = (2/15)(13/14) + (3/4)(1/14) = 149/840 = 0.177381.
+        #
+        # seq1: bounce at frame 2 (y = 8 < 10), colours [B, B, R, GRAY, GRAY,
+        #   R, R, R, G, G, G, PAD x3] -> inferred [B, B, R, R, R, R, R, R, G, G,
+        #   G, PAD x3]; color_change True at j=1 (frame 2, the bounce), j=7
+        #   (frame 8) and j=10 (frame 11, the pre-existing G -> PAD artefact).
+        #   The grayzone run [3, 4] exits at frame 5 with NO colour change, and
+        #   carries no vc, so the exit path stays inert (DRIFT-1's verdict for
+        #   this row is unchanged: velocity_change_shifted = {j=1}).
+        #     color_change_bounce = {j=1}; color_change_random = {j=7, j=10}.
+        #   pccnvc: (1 + 11, 0 + 2) = (12, 2) -> 3/16 (was (12, 4) -> 5/18; the
+        #     frame-2 change left the random channel and the head duplication no
+        #     longer doubles a success at j=0).
+        #   pccovc: (0, 2) -> 3/4 (was (2, 0) -> 1/4), same arithmetic as seq0.
         #   beliefs[1, -1] is a PAD frame, never written in the loop, so it stays
         #     at the 1/3 init regardless.
-        assert torch.allclose(m_nvc[:, -1], torch.tensor([4 / 17, 5 / 18]), atol=ATOL)
-        assert torch.allclose(m_ovc[:, -1], torch.tensor([0.25, 0.25]), atol=ATOL)
+        assert torch.allclose(
+            beliefs[:, -1],
+            torch.tensor([[149 / 840, 0.0, 691 / 840], [1 / 3, 1 / 3, 1 / 3]]),
+            atol=ATOL,
+        )
+        assert torch.allclose(m_nvc[:, -1], torch.tensor([2 / 15, 3 / 16]), atol=ATOL)
+        assert torch.allclose(m_ovc[:, -1], torch.tensor([0.75, 0.75]), atol=ATOL)
         assert torch.allclose(m_pvc[:, -1], torch.tensor([1 / 14, 1 / 14]), atol=ATOL)
 
     def test_deterministic(self, samples):
@@ -186,6 +215,61 @@ class TestIdealCountingObserver:
         a = ico(samples, return_means=False)
         b = ico(samples, return_means=False)
         assert torch.equal(a, b)
+
+    def test_visible_bounce_pairs_with_colour_change_at_the_bounce_frame(self):
+        # ICO-A. The task's convention is that a bounce-contingent colour change
+        # happens AT the bounce frame. Pins that pairing on EXACT boolean arrays
+        # (no Dirichlet arithmetic), on a fully VISIBLE bounce so no grayzone
+        # attribution is involved.
+        #
+        # row 0 -- bounce at frame 2 with the colour change at frame 2.
+        #   x = [232, 240, 248, 240, 232, 224]
+        #     v      = [ 8, 8, -8, -8, -8]
+        #     v2diff = [ 0, -16,  0,  0]  -> velocity_change[1] (frame 2)
+        #     oob    = [F, F, T, F, F, F] (248 > 246) -> the vc is a BOUNCE
+        #   colours [R, R, G, G, G, G] -> color_change at frame 2, i.e. index
+        #   j = 1 in the event space (index j <-> frame j+1) that ICO-A puts the
+        #   colour arrays in.
+        #     broken -> color_change_bounce[0] == [0, 0, 0, 0]  (the change was
+        #               read at color_change[:, 1:][0], one frame LATE) and
+        #               color_change_random[0]  == [1, 0, 0, 0]  (misfiled into
+        #               the random channel, one cell early)
+        #     fixed  -> color_change_bounce[0] == [0, 1, 0, 0], random all zero.
+        #
+        # row 1 -- inert companion carrying the grayzone frame the ICO's
+        #   attribution path expects. Straight line (x = 100..120, no oob, no
+        #   vc) and the occluded frame forward-fills to the same colour, so it
+        #   declares no colour change at all and cannot perturb row 0 (every
+        #   mask below is computed per sequence).
+        # fmt: off
+        pos_0 = [[232.0, 128.0], [240.0, 128.0], [248.0, 128.0],
+                 [240.0, 128.0], [232.0, 128.0], [224.0, 128.0]]
+        pos_1 = [[100.0, 128.0], [104.0, 128.0], [108.0, 128.0],
+                 [112.0, 128.0], [116.0, 128.0], [120.0, 128.0]]
+        col_0 = [_R, _R, _G, _G, _G, _G]
+        col_1 = [_R, _R, _GRAY, _R, _R, _R]
+        # fmt: on
+        samples = torch.cat(
+            [
+                torch.tensor([pos_0, pos_1], dtype=torch.float),
+                torch.tensor([col_0, col_1], dtype=torch.float),
+            ],
+            dim=-1,
+        )
+        ico = IdealCountingObserver(prog_bar=False)
+        ico(samples, return_means=True)
+
+        # the detector itself (unchanged by ICO-A): index j <-> frame j+1
+        assert ico.velocity_change_bounce[0].tolist() == [False, True, False, False]
+        assert ico.velocity_change_random[0].tolist() == [False] * 4
+
+        # the pairing: bounce channel, NOT random.
+        assert ico.color_change_bounce[0].tolist() == [0.0, 1.0, 0.0, 0.0]
+        assert ico.color_change_random[0].tolist() == [0.0] * 4
+
+        # the companion declares nothing in either channel.
+        assert ico.color_change_bounce[1].tolist() == [0.0] * 4
+        assert ico.color_change_random[1].tolist() == [0.0] * 4
 
     def test_attribution_window_is_spec_closed_interval(self):
         # DRIFT-1. Pins the SPEC's [s, e] attribution window on EXACT boolean
@@ -206,6 +290,9 @@ class TestIdealCountingObserver:
         #   RANDOM colour change (colour changed with no attributable vc).
         #     broken -> ico.color_change_random[0] == [0, 0, 0, 1, 0, 0]
         #     fixed  -> all zeros (the change is attributed to the run's bounce).
+        #   ICO-B additionally lands it in the CONTINGENT channel rather than
+        #   nowhere: color_change_bounce[0] == [0, 0, 0, 0, 1, 0] (cell j = 4
+        #   <-> the exit frame 5, in the post-ICO-A event space).
         #
         # row B -- run [4, 5] with a random vc on frame 3 (the last VISIBLE frame
         #   before entry) AND a random vc on frame 4 (inside the run).
@@ -214,11 +301,21 @@ class TestIdealCountingObserver:
         #     v2diff = [ 0, 0, -8, 8, 0, 0]  -> velocity_change[2], [3]
         #                                       (frames 3 and 4); never oob
         #   Only frame 4 is inside [s, e] = [4, 5]. Frame 3's vc must keep its
-        #   own index (j = 2), while the run's aggregate lands on the exit cell
-        #   (j = 4). The old code registered frame 3's vc as the run's cause AND
-        #   stripped it from its own index:
-        #     broken -> velocity_change_random_shifted[1] == [F,F,F,F,T,F]
-        #     fixed  -> [F, F, T, F, T, F]
+        #   own index (j = 2), while the run's aggregate lands on the exit cell.
+        #   The old code registered frame 3's vc as the run's cause AND stripped
+        #   it from its own index:
+        #     broken       -> velocity_change_random_shifted[1] == [F,F,F,F,T,F]
+        #     DRIFT-1 only -> [F, F, T, F, T, F]  (exit cell j = e-1 = 4, in the
+        #                     pre-ICO-A frame-(j+2) colour space)
+        #     + ICO-A      -> [F, F, T, F, F, T]  (exit cell j = e = 5 <-> the
+        #                     exit frame 6, now that the colour arrays share the
+        #                     velocity index space). The WINDOW verdict -- frame
+        #                     3 in, frame 4 the cause -- is identical; only the
+        #                     index space of the plant moved.
+        #   ICO-B: the exit colour change is explained by the run's RANDOM vc, so
+        #   it joins the contingent channel too (see the model-side note on the
+        #   design doc's literal "random channel" wording):
+        #     color_change_bounce[1] == [0, 0, 0, 0, 0, 1]
         # fmt: off
         pos_a = [[236.0, 128.0], [240.0, 128.0], [244.0, 128.0], [248.0, 128.0],
                  [252.0, 128.0], [248.0, 128.0], [244.0, 128.0], [240.0, 128.0]]
@@ -243,14 +340,18 @@ class TestIdealCountingObserver:
 
         # row A: the run's own bounce now explains the exit-frame colour change
         assert ico.color_change_random[0].tolist() == [0.0] * 6
-        # ... and a length-1 run leaves the aggregate on the exit cell (j = e - 1 = 3)
-        expected_a = [False, False, False, True, False, False]
+        # ... and a length-1 run leaves the aggregate on the exit cell (j = e = 4)
+        expected_a = [False, False, False, False, True, False]
         assert ico.velocity_change_bounce_shifted[0].tolist() == expected_a
+        # ICO-B: and the change is BANKED there instead of vanishing.
+        assert ico.color_change_bounce[0].tolist() == [0.0, 0.0, 0.0, 0.0, 1.0, 0.0]
 
         # row B: frame 3 (last visible pre-entry) keeps its own index j = 2;
-        # the run's aggregate lands on the exit cell j = 4.
-        expected_b = [False, False, True, False, True, False]
+        # the run's aggregate lands on the exit cell j = 5.
+        expected_b = [False, False, True, False, False, True]
         assert ico.velocity_change_random_shifted[1].tolist() == expected_b
+        assert ico.color_change_random[1].tolist() == [0.0] * 6
+        assert ico.color_change_bounce[1].tolist() == [0.0, 0.0, 0.0, 0.0, 0.0, 1.0]
 
 
 class TestIdealCountingObserverV2:
