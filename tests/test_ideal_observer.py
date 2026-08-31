@@ -160,7 +160,7 @@ class TestIdealCountingObserver:
         ico = IdealCountingObserver(prog_bar=False)
         beliefs, m_nvc, m_ovc, m_pvc = ico(samples, return_means=True)
         # ICO-A (bounce/colour pairing skew) re-baselines BOTH rows. HAND-DERIVED
-        # (pending empirical confirmation). Common index convention: every
+        # (empirically confirmed 2026-08-31, 47/47). Common index convention: every
         # (B, T-2) event mask now lives in the event space, index j <-> frame j+1.
         #
         # seq0: x = [232, 240, 248, 240, ...] -> oob at frame 2 only,
@@ -402,7 +402,7 @@ class TestIdealCountingObserverV2:
         # read the uniform init, so every non-visible slot -- grayzone and padded
         # alike -- came out uniform; post-W8 the last visible belief is carried
         # forward.
-        # HAND-DERIVED (pending empirical confirmation): seq1's counts freeze at
+        # HAND-DERIVED (empirically confirmed 2026-08-31, 47/47): seq1's counts freeze at
         # alpha_hz=3, beta_hz=8 after t=10, so p_change = 3/11 for t=11..13 and the
         # belief evolves [0,1,0] -> [0,8,3]/11 -> [9,64,48]/121 -> [216,539,576]/1331.
         assert torch.allclose(
@@ -418,7 +418,7 @@ class TestIdealCountingObserverV2:
         # Straight-line positions (no oob, constant velocity) => no bounces, so
         # only the hz channel can move and cont stays at the (1, 1) prior.
         #
-        # HAND-DERIVED (pending empirical confirmation), colours
+        # HAND-DERIVED (empirically confirmed 2026-08-31, 47/47), colours
         # [GRAY, R, R, GRAY, R, R]:
         #   t=1  hidden (gray -> R), run is ANCHORLESS -> no accumulation.
         #        belief seeded from the exit colour by the visible-frame emission
