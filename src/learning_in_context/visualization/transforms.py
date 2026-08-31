@@ -54,6 +54,7 @@ untouched.
 
 from __future__ import annotations
 
+import hashlib
 import os
 import pickle
 from pathlib import Path
@@ -967,3 +968,269 @@ def gate_activity_delta_frame(
         per_model.append(plot_df)
 
     return pd.concat(per_model).reset_index(drop=True)
+
+
+# --------------------------------------------------------------------------- #
+# Model confidence-weighted choice (shared by the hazard and contingency panels)
+# --------------------------------------------------------------------------- #
+# The trial table, the per-model CWC frame, and the two condition aggregates all
+# derive from one plain implementation helper apiece. Each memoized entry point
+# below calls those helpers rather than calling a sibling memoized transform:
+# joblib keys a cached result on the decorated function's own source, so a
+# transform that delegated to another memoized transform could serve a stale
+# aggregate against a freshly recomputed base frame.
+
+_CATCH_LABEL = "Catch"
+_CATCH_FAST_LABEL = "Catch-Fast"
+
+# A catch trial whose final colour settles this many timesteps (or fewer) before
+# the video ends gives no time to register a late change, so it is scored as a
+# separate "fast" condition rather than as an ordinary catch trial.
+_CATCH_FAST_MAX_SETTLE_STEPS = 8
+
+_HAZARD_DTYPE = pd.CategoricalDtype(["Low", "High"], ordered=True)
+_CONTINGENCY_DTYPE = pd.CategoricalDtype(["Low", "Medium", "High"], ordered=True)
+
+
+def _trial_metadata_impl(dataset: str) -> pd.DataFrame:
+    """Trial table for one dataset with conditions typed and catch trials split."""
+    base = _dataset_dir(dataset)
+    df_data = pd.read_csv(base / "trial_meta.csv", index_col=0)
+    df_data["Hazard Rate"] = df_data["Hazard Rate"].astype(_HAZARD_DTYPE)
+    df_data["Contingency"] = df_data["Contingency"].astype(_CONTINGENCY_DTYPE)
+
+    df_catch = df_data[df_data["trial"] == _CATCH_LABEL]
+    settle_steps = []
+    for block, video in df_catch[["Dataset Block", "Dataset Block Video"]].to_numpy():
+        video_dir = base / "videos" / f"block_{block}" / f"video_{video}"
+        colors = pd.read_csv(sorted(video_dir.glob("*_samples.csv"))[0])[
+            ["r", "g", "b"]
+        ].to_numpy()
+        last_idx = len(colors) - 1
+        differs = np.flatnonzero((colors[:-1] != colors[-1]).any(axis=1))
+        # No earlier frame differs from the final colour: the trial never
+        # settles late, so it stays an ordinary catch trial.
+        settle_steps.append(last_idx - (differs[-1] if differs.size else -1))
+
+    idx_catch_fast = df_catch.index[
+        np.asarray(settle_steps, dtype=int) <= _CATCH_FAST_MAX_SETTLE_STEPS
+    ]
+    df_data.loc[idx_catch_fast, "trial"] = _CATCH_FAST_LABEL
+    return df_data
+
+
+def _sample_rng(
+    seed: int, model_type: str, exp_id: str, sample_idx: int
+) -> np.random.Generator:
+    """Generator for one (model type, prediction file, sample) draw.
+
+    The stream is derived from a stable digest of the triple rather than from
+    draw order, so a sample's choices depend only on ``seed`` and its own
+    identity: adding, removing, or reordering models and prediction files leaves
+    every other sample's draws untouched. A stable digest is required because
+    Python's builtin ``hash`` of a string is salted per process.
+    """
+    key = f"{model_type}/{exp_id}/{sample_idx}".encode()
+    digest = int.from_bytes(hashlib.blake2b(key, digest_size=8).digest(), "big")
+    return np.random.default_rng(np.random.SeedSequence([int(seed), digest]))
+
+
+def _model_cwc_frame_impl(
+    dataset: str,
+    model_types: tuple[str, ...],
+    num_participants: int,
+    seed: int,
+) -> pd.DataFrame:
+    """One row per (model, sampled response set, video) — see :func:`model_cwc_frame`."""
+    df_data = _trial_metadata_impl(dataset)
+    num_videos = len(df_data)
+    videos = np.arange(num_videos)
+
+    # Colour columns are 1-based in the trial table; predictions are 0-based.
+    color_entered = df_data["color_entered"].to_numpy() - 1
+    correct_response = df_data["correct_response"].to_numpy() - 1
+    final_step = df_data["length"].to_numpy() - 1
+
+    # Positional (index-free) copies, so every per-sample frame is assembled by
+    # position rather than by an incidental index alignment.
+    video_ids = df_data.index.to_numpy()
+    grayzone = df_data["idx_time"].to_numpy()
+    hazard = df_data["Hazard Rate"].array
+    contingency = df_data["Contingency"].array
+    trial = df_data["trial"].to_numpy()
+
+    frames = []
+    for model_type in model_types:
+        paths = sorted((_dataset_dir(dataset) / model_type).glob("*.npz"))
+        # Every prediction file stands in for a share of the participant pool,
+        # with one extra sample so the pool is always covered.
+        num_samples = num_participants // len(paths) + 1
+        for path in paths:
+            exp_id = path.stem
+            preds = np.load(str(path), allow_pickle=True)["preds"][videos, final_step]
+            cumulative = np.cumsum(preds, axis=1)
+            for sample_idx in range(num_samples):
+                draws = _sample_rng(seed, model_type, exp_id, sample_idx).random(
+                    num_videos
+                )
+                choice_sampled = np.argmax(draws[:, None] < cumulative, axis=1)
+                # A response matching the colour the participant entered is a
+                # "stay" (-1); any other colour is a "switch" (+1).
+                choice_coded = np.where(color_entered == choice_sampled, -1, 1)
+                choice_prob = preds[videos, choice_sampled]
+                frames.append(
+                    pd.DataFrame(
+                        {
+                            "prob_r": preds[:, 0],
+                            "prob_g": preds[:, 1],
+                            "prob_b": preds[:, 2],
+                            "choice_sampled": choice_sampled,
+                            "choice_coded": choice_coded,
+                            "choice_prob": choice_prob,
+                            "cwc": choice_coded * choice_prob,
+                            "exp_id": exp_id,
+                            "sample_id": f"{exp_id}-{sample_idx}",
+                            "model": model_type.upper(),
+                            "Video ID": video_ids,
+                            "correct_response": correct_response,
+                            "Grayzone Position": grayzone,
+                            "Hazard Rate": hazard,
+                            "Contingency": contingency,
+                            "trial": trial,
+                        }
+                    )
+                )
+
+    return pd.concat(frames, axis=0).reset_index(drop=True)
+
+
+@MEMORY.cache
+def trial_metadata(dataset: str) -> pd.DataFrame:
+    """Per-video trial table for one model-states dataset (memoized).
+
+    Reads ``model_states/<dataset>/trial_meta.csv``, types the two condition
+    columns as ordered categoricals (``Hazard Rate`` as Low < High,
+    ``Contingency`` as Low < Medium < High) so downstream group and axis order
+    follow the experimental order, and splits the catch trials: a catch trial
+    whose colour sequence reaches its final colour within
+    ``8`` timesteps of the end is relabeled ``"Catch-Fast"``,
+    read off that video's sample CSV under the dataset's ``videos/`` tree.
+
+    Args:
+        dataset: model-states dataset name (e.g. ``"participant_dataset"``).
+
+    Returns:
+        The trial table indexed by ``Video ID``, one row per video, with the
+        same row count as the raw CSV.
+    """
+    return _trial_metadata_impl(dataset)
+
+
+@MEMORY.cache
+def model_cwc_frame(
+    dataset: str,
+    model_types: tuple[str, ...],
+    num_participants: int,
+    seed: int,
+) -> pd.DataFrame:
+    """Per-model confidence-weighted choice, one row per sampled response (memoized).
+
+    Each prediction file under ``model_states/<dataset>/<model_type>/`` holds a
+    model's per-timestep colour distribution. The distribution at each video's
+    final timestep is sampled ``num_participants // n_files + 1`` times, giving a
+    synthetic pool of model "participants" comparable in size to the human one.
+    Every sample yields a confidence-weighted choice per video,
+    ``cwc = choice_coded * choice_prob``, where ``choice_coded`` is ``-1`` when
+    the sampled colour matches the colour entered for that video and ``+1``
+    otherwise, and ``choice_prob`` is the model's probability mass on the colour
+    it sampled.
+
+    Sampling is seeded per (model type, prediction file, sample index), so the
+    same ``seed`` always reproduces the same frame and narrowing ``model_types``
+    leaves the remaining models' draws unchanged.
+
+    Args:
+        dataset: model-states dataset name (e.g. ``"participant_dataset"``).
+        model_types: sub-directories to read, e.g. ``("ibo", "rnn", "lstm")``.
+        num_participants: size of the pool the sample count is matched to.
+        seed: base seed; required, so sampling can never run unseeded.
+
+    Returns:
+        Tidy DataFrame with columns ``[prob_r, prob_g, prob_b, choice_sampled,
+        choice_coded, choice_prob, cwc, exp_id, sample_id, model, Video ID,
+        correct_response, Grayzone Position, Hazard Rate, Contingency, trial]``.
+    """
+    return _model_cwc_frame_impl(dataset, model_types, num_participants, seed)
+
+
+@MEMORY.cache
+def model_cwc_by_hazard(
+    dataset: str,
+    model_types: tuple[str, ...],
+    num_participants: int,
+    seed: int,
+) -> pd.DataFrame:
+    """Mean CWC per hazard-rate condition and grayzone position (memoized).
+
+    Restricts :func:`model_cwc_frame` to straight-path trials — the only trials
+    carrying a grayzone position — and averages ``cwc`` within each
+    (model, sample, hazard rate, grayzone position) cell. One row per point the
+    hazard panels plot.
+
+    Args:
+        dataset: model-states dataset name.
+        model_types: sub-directories to read, e.g. ``("ibo", "rnn", "lstm")``.
+        num_participants: size of the pool the sample count is matched to.
+        seed: base seed for the choice sampling; required.
+
+    Returns:
+        Tidy DataFrame with columns
+        ``[model, model_sample, Hazard Rate, Grayzone Position, cwc]``.
+    """
+    frame = _model_cwc_frame_impl(dataset, model_types, num_participants, seed)
+    straight = frame[frame["trial"] == "Straight"]
+    grouped = (
+        straight.groupby(
+            ["model", "sample_id", "Hazard Rate", "Grayzone Position"], observed=True
+        )["cwc"]
+        .mean()
+        .reset_index()
+        .rename(columns={"sample_id": "model_sample"})
+    )
+    return grouped[
+        ["model", "model_sample", "Hazard Rate", "Grayzone Position", "cwc"]
+    ]
+
+
+@MEMORY.cache
+def model_cwc_by_contingency(
+    dataset: str,
+    model_types: tuple[str, ...],
+    num_participants: int,
+    seed: int,
+) -> pd.DataFrame:
+    """Mean CWC per contingency condition (memoized).
+
+    Restricts :func:`model_cwc_frame` to wall-bounce trials — the trials where
+    the colour-change contingency is manipulated — and averages ``cwc`` within
+    each (model, sample, contingency) cell. One row per point the contingency
+    panels plot.
+
+    Args:
+        dataset: model-states dataset name.
+        model_types: sub-directories to read, e.g. ``("ibo", "rnn", "lstm")``.
+        num_participants: size of the pool the sample count is matched to.
+        seed: base seed for the choice sampling; required.
+
+    Returns:
+        Tidy DataFrame with columns ``[model, model_sample, Contingency, cwc]``.
+    """
+    frame = _model_cwc_frame_impl(dataset, model_types, num_participants, seed)
+    bounce = frame[frame["trial"] == "Bounce"]
+    grouped = (
+        bounce.groupby(["model", "sample_id", "Contingency"], observed=True)["cwc"]
+        .mean()
+        .reset_index()
+        .rename(columns={"sample_id": "model_sample"})
+    )
+    return grouped[["model", "model_sample", "Contingency", "cwc"]]
