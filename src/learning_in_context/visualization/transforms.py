@@ -1,29 +1,46 @@
-"""Shared, memoized figure transformations (figures/SPEC.md rule 8).
+"""Shared, memoized figure transformations for the paper's figure scripts.
 
 Tier-2 of the three-tier figure pipeline: everything between the tier-1 cached
-model-state artifacts (``data/cache/model_states/``) and a plot-ready DataFrame.
+model-state artifacts (``data/cache/model_states/``, produced by ``dodo.py``'s
+compute tasks) and a plot-ready DataFrame, which the tier-3 figure scripts turn
+into styled SVG panels. Splitting the tiers is what lets styling iterate freely
+without re-paying transformation cost. Figure scripts therefore render, they do
+not compute: a panel needing data no ``dodo.py`` task produces gets a new
+compute task rather than an inline computation (fig4's ElasticNet fits are the
+one tolerated exception, and even those are memoized here).
+
 Transforms are pure functions decorated with a single shared ``joblib.Memory``
 instance so results are cached once and reused across every figure script.
+``mo.persistent_cache`` is deliberately not used: it keys on per-cell identity,
+which would defeat sharing a result between scripts.
 
 Cache-dir seam
 --------------
 :func:`get_memory` is a factory. With ``cache_dir=None`` it reads the env var
 ``LIC_FIG_CACHE_DIR``; if that is unset it defaults to
-``<repo_root>/data/cache/fig_transforms`` (SPEC rule 8: "cache lives beside
-tier-1 artifacts in data/cache/"). The module-level :data:`MEMORY` is the shared
-instance every memoized transform below is decorated with. Tests pass an
+``<repo_root>/data/cache/fig_transforms`` — the transform cache lives beside the
+tier-1 artifacts under ``data/cache/``. The module-level :data:`MEMORY` is the
+shared instance every memoized transform below is decorated with. Tests pass an
 explicit ``cache_dir=`` (or set the env var) to isolate a throwaway cache.
 
-Keying discipline (SPEC rule 8)
--------------------------------
+joblib invalidates a cached result when the function's *source* or its arguments
+change — editing a memoized function's body, docstring, or comments is enough to
+force a recompute on the next run.
+
+Keying discipline
+-----------------
 Every memoized transform keys on **paths / ids / params only** (dataset name,
 model name, experiment id, small numeric knobs, hashable tuples) and loads the
 underlying arrays internally — never accepting a preloaded ``states`` /
 ``samples`` / ``targets`` array as an argument. That keeps the cache key small
 and stable instead of forcing joblib to hash multi-GB arrays on every call.
 
-Two transforms are exposed (the two-function split is the test contract — the
-tests import both by name):
+Promotion policy: a transform lives here once it has (or gains) a second
+consumer; otherwise it stays script-local — still memoized, just not shared.
+Promoting later is cheap.
+
+Two fig5 transforms are exposed under stable names (the tests import both by
+name):
 
 * :func:`ordered_change_windows` — the per-timestep, per-unit, per-change-order
   windows that feed fig5's activity time-course panels.
@@ -63,7 +80,7 @@ def get_memory(cache_dir: str | Path | None = None) -> joblib.Memory:
     Resolution order (evaluated at call time):
         1. explicit ``cache_dir`` argument,
         2. the ``LIC_FIG_CACHE_DIR`` environment variable,
-        3. ``<repo_root>/data/cache/fig_transforms`` (SPEC rule 8).
+        3. ``<repo_root>/data/cache/fig_transforms``.
     """
     if cache_dir is None:
         env = os.environ.get("LIC_FIG_CACHE_DIR")
@@ -74,7 +91,7 @@ def get_memory(cache_dir: str | Path | None = None) -> joblib.Memory:
 # Shared instance every memoized transform below is decorated with.
 MEMORY = get_memory()
 
-# Manual-recompute knob (SPEC rule 8): FORCE_RECOMPUTE reflects the env var at
+# Manual-recompute knob: FORCE_RECOMPUTE reflects the env var at
 # import time. When set, the shared cache is cleared on import, so any run
 # started with ``LIC_FIG_FORCE_RECOMPUTE=1`` recomputes every transform.
 FORCE_RECOMPUTE = os.environ.get("LIC_FIG_FORCE_RECOMPUTE", "").strip().lower() in {
@@ -88,7 +105,7 @@ if FORCE_RECOMPUTE:
 
 
 def clear_cache(memory: joblib.Memory | None = None) -> None:
-    """Drop all memoized results (SPEC rule 8's ``memory.clear()`` knob).
+    """Drop all memoized results — the manual-recompute knob.
 
     Clears the given ``Memory`` instance, defaulting to the shared
     :data:`MEMORY`.
@@ -130,10 +147,10 @@ STAT_UNITS: dict[str, dict[str, dict[int, str]]] = {
 # blocks (fig_contingency_activity.py:182).
 EXP_NO_CONT = frozenset({"san-4602", "san-4605", "san-4616", "san-4617"})
 
-# Contingency-block PROFILE unit set (deck-verified, see fig5 docstring): the
-# "hz" exemplar units restricted to the 6 contingency models. Numerically
-# confirmed against the deck page ("Fig 5 - Crit Unit Behavior-1.png"): the
-# deck's contingency profile decays/steps match these units exactly (decay is
+# Contingency-block PROFILE unit set (see the fig5 script's docstring): the
+# "hz" exemplar units restricted to the 6 contingency models. Confirmed
+# numerically against figure 5 as composed for the paper — its contingency
+# profile decays/steps match these units exactly (decay is
 # criterion-independent, so matching decays fingerprint the unit set), while
 # the "cont" exemplar units do not.
 STAT_UNITS["hz_cont"] = {
@@ -249,12 +266,12 @@ def _diff_around_criterion(states, targets, df_selected, tau, criterion_mode):
     if criterion_mode == "color_change":
         criterion_mask = targets[:, :, -1] == 1
     elif criterion_mode == "bounce_color_change":
-        # Contingent (bounce-triggered) color change. NOTE: the literal source
-        # cell (fig_contingency_activity.py:1170) masks on
+        # Contingent (bounce-triggered) color change. NOTE: the corresponding
+        # cell in ``figures/fig_contingency_activity.py`` masks on
         # ``(targets[:, :, -4:-2] == 1).any(-1)`` (every bounce), but that cell
         # is dead code (empty "hz" dict) and its criterion does NOT reproduce
-        # the deck's block-2 profile panel; ``targets[:, :, -2] == 1`` does,
-        # exactly (verified numerically against the deck page).
+        # figure 5's contingency profile panel; ``targets[:, :, -2] == 1`` does,
+        # exactly (verified numerically against the composed figure).
         criterion_mask = targets[:, :, -2] == 1
     elif criterion_mode == "bounce_no_change":
         criterion_mask = (targets[:, :, -4] == 1) & (targets[:, :, -2] == 0)
@@ -325,7 +342,7 @@ def ordered_change_windows(
     """Per-timestep, per-unit, per-change-order activity windows for one model.
 
     Feeds the fig5 activity time-course panels. Loads the model's states,
-    samples, and targets internally (keyed only on ids/params per SPEC rule 8),
+    samples, and targets internally (keyed only on ids/params),
     windows them around the k-th change target at ``change_idx``, splits by
     ``split_col`` (e.g. "Hazard Rate" / "Contingency"), and returns a tidy long
     DataFrame with columns ``[condition, unit, order, Timestep, Value]``.
@@ -399,16 +416,15 @@ def elasticnet_coefficient_paths(
 ) -> dict:
     """ElasticNet regularization-path fit for one decoder (fig4, memoized).
 
-    Ports the fig4 data/fit pipeline from
-    ``hmdcpd-analysis/notebooks/DS2-Identifying-Critical-Units.py`` (the
-    ``linear_regularization_pipeline`` cell ``:523`` and its decoder/target
-    definitions). This is fig4's SPEC-rule-4 *tolerated* inline compute — the
-    ElasticNet fits run here rather than in a ``dodo.py`` task — so it is
-    memoized through the shared :data:`MEMORY` and keyed only on
-    paths/ids/params (SPEC rule 8); the state array and target labels are loaded
-    internally, never passed in.
+    Ports the fig4 data/fit pipeline (the linear regularization pipeline and its
+    decoder/target definitions) from the exploratory analysis notebooks in the
+    sibling ``hmdcpd-analysis`` repo. This is the pipeline's one tolerated piece
+    of inline compute — the ElasticNet fits run here rather than in a ``dodo.py``
+    task — so it is memoized through the shared :data:`MEMORY` and keyed only on
+    paths/ids/params; the state array and target labels are loaded internally,
+    never passed in.
 
-    The decoder input ``X`` is the DS2 recipe: z-score the concatenation of the
+    The decoder input ``X`` follows the source recipe: z-score the concatenation of the
     first ``M`` hidden and cell states over the (trial, time) axes, then take the
     single timestep ``timestep_from_end`` steps from the end — a
     ``(n_trials, 2 * hidden_size)`` feature matrix (32 columns: 16 hidden + 16
@@ -419,7 +435,7 @@ def elasticnet_coefficient_paths(
             regression → scalar F1) or ``"cont_r"`` (3-class contingency decode
             cast as elastic-net regression → per-label F1 vector, ``average=None``).
         n_alphas: number of points on the ``C``/alpha sweep.
-        logspace_hi / logspace_lo: ``np.logspace`` exponents (DS2: ``0`` → ``-6``,
+        logspace_hi / logspace_lo: ``np.logspace`` exponents (``0`` → ``-6``,
             i.e. ``C`` from ``1`` down to ``1e-6``).
 
     Returns:
@@ -428,13 +444,13 @@ def elasticnet_coefficient_paths(
           * ``intercepts``: list of per-alpha intercept arrays,
           * ``metrics``: ``{"accuracy": (n_alphas,), "f1": (n_alphas,) or
             (n_alphas, n_labels)}`` — hz f1 is scalar-per-alpha, cont_r f1 is
-            per-label (matches the deck's ``F1`` vs. ``F1 - Label 0/1/2``),
+            per-label (the composed figure's ``F1`` vs. ``F1 - Label 0/1/2``),
           * ``C_logspace``: the sweep values (x-axis, plotted as "ElasticNet Alpha").
     """
     from sklearn.linear_model import ElasticNet, LogisticRegression
     from sklearn.metrics import accuracy_score, f1_score
 
-    # --- decoder input X (DS2 recipe) --------------------------------------- #
+    # --- decoder input X ----------------------------------------------------- #
     path = _dataset_dir(dataset) / model_name / f"{exp_id}.npz"
     model_data = np.load(str(path), allow_pickle=True)
     z = stats.zscore(
@@ -463,15 +479,15 @@ def elasticnet_coefficient_paths(
     f1_path: list = []
 
     if stat == "cont_r":
-        # reg_linear (DS2:431): cast the 0/1/2 labels to [0, .5, 1], fit
-        # ElasticNet, predict the nearest label. alpha is DS2's C→alpha map.
+        # Regression cast: map the 0/1/2 labels to [0, .5, 1], fit ElasticNet,
+        # predict the nearest label. alpha comes from the source's C→alpha map.
         y_choices = np.unique(y)
         y_reg = (y_choices - y_choices.min()) / (y_choices.max() - y_choices.min())
         y_scaled = (y - y_choices.min()) / (y_choices.max() - y_choices.min())
         for C in C_logspace:
-            # DS2's C->alpha map hits exactly 0 at C == 1 (the no-regularization
-            # endpoint). Under the DS2-era sklearn that behaved as OLS; sklearn
-            # 1.8's ElasticNet(alpha=0) instead collapses to a constant fit
+            # The C->alpha map hits exactly 0 at C == 1 (the no-regularization
+            # endpoint). Under the sklearn the source notebooks ran against that
+            # behaved as OLS; sklearn 1.8's ElasticNet(alpha=0) collapses to a constant fit
             # (the "coordinate descent with no regularization" path), corrupting
             # the leftmost alpha of the contingency panels. Floor alpha to a
             # tiny positive value to reproduce the intended near-OLS behavior.
@@ -488,7 +504,7 @@ def elasticnet_coefficient_paths(
             intercepts.append(np.reshape(reg.intercept_, (1,)))
             acc_path.append(accuracy_score(y, pred))
             f1_path.append(f1_score(y, pred, average=None))
-    else:  # "hz" — reg_single (DS2:384): binary elastic-net logistic decode.
+    else:  # "hz" — binary elastic-net logistic decode.
         for C in C_logspace:
             reg = LogisticRegression(
                 solver="saga",
@@ -539,8 +555,8 @@ def activity_change_profile(
             ``"bounce_no_change"`` (contingency no-change block).
         unit_set: which exemplar-unit mapping to use — ``"hz"`` (all 10
             models; hazard block), ``"hz_cont"`` (hz units of the 6
-            contingency models; both contingency profile blocks,
-            deck-verified), or ``"cont"`` (contingency exemplar units, used
+            contingency models; both contingency profile blocks, verified
+            against the composed figure), or ``"cont"`` (contingency exemplar units, used
             by the time-course panels' unit choice, kept for reference).
     """
     samples, targets, df_data, _padding = _load_dataset(dataset)
@@ -579,26 +595,26 @@ def activity_change_profile(
 
 
 # --------------------------------------------------------------------------- #
-# Intervention prediction frames (SPEC rule 8 known-shared-from-day-one)
+# Intervention prediction frames (shared by fig6 and fig7)
 # --------------------------------------------------------------------------- #
 # The per-model, per-alpha intervention prediction frames feed fig6's
 # intervention time-courses and summary point plots, and are reused by fig7's
-# gate panels (SPEC rule 8: "the per-model intervention frames — DS6.2 + DS6.4
-# both build them from interventions/"). Ported verbatim from
-# ``hmdcpd-analysis/notebooks/DS4-Interventions.py`` — ``window_samples``
-# (``:241``) and ``process_model_predictions_1`` (``:636``) — split into this
-# memoized per-model transform so figure scripts only pay the load/window cost
-# once. Keyed on ids/params only (SPEC rule 8); the ``.npz`` preds array and
-# trial metadata are loaded internally, never passed in.
+# gate panels — hence a single memoized transform here rather than a copy per
+# figure script. Ported verbatim (sample windowing + per-model prediction
+# frame) from the exploratory analysis notebooks in the sibling
+# ``hmdcpd-analysis`` repo, split into this memoized per-model transform so
+# figure scripts only pay the load/window cost once. Keyed on ids/params only;
+# the ``.npz`` preds array and trial metadata are loaded internally, never
+# passed in.
 
 
 def _interventions_meta() -> pd.DataFrame:
-    """Trial metadata shared across every intervention model (DS4 ``df_data``)."""
+    """Trial metadata shared across every intervention model."""
     return pd.read_csv(_INTERVENTIONS_ROOT / "trial_meta.csv", index_col=0)
 
 
 def _intervention_npz_name(stat: str, unit: str | None, num_alphas: int) -> str:
-    """Reconstruct DS4's ``process_model_predictions_1`` npz filename.
+    """Reconstruct the cached intervention-prediction npz filename.
 
     ``{stat}[-{unit}]-centroid-interventions-{num_alphas}-alphas.npz`` where
     ``stat`` is ``"hz"`` / ``"cont"`` and ``unit`` is ``"hidden"`` / ``"cell"``
@@ -614,7 +630,7 @@ def _intervention_npz_name(stat: str, unit: str | None, num_alphas: int) -> str:
 def _window_samples(samples: np.ndarray, endpoints: np.ndarray, N: int) -> np.ndarray:
     """Take the last ``N`` timesteps before each trial's endpoint.
 
-    Ported verbatim from DS4 ``window_samples`` (``:241``).
+    Ported verbatim from the source analysis notebooks.
     """
     b, T, f = samples.shape
     t_idx = endpoints[:, None] + np.arange(-N, 0)
@@ -637,7 +653,7 @@ def intervention_prediction_frame(
     (``interventions/{model_name}/{exp_id}/{stat}[-{unit}]-...alphas.npz``),
     windows the last ``N`` timesteps before each trial endpoint, extracts the
     probability of the entered colour per (alpha, video, timestep, centroid),
-    and returns the melted long frame DS4's plotting cells consume.
+    and returns the melted long frame the intervention panels consume.
 
     Args:
         model_name: sub-directory under ``interventions/`` (e.g. ``"lstm"``).
@@ -645,8 +661,8 @@ def intervention_prediction_frame(
         stat: ``"hz"`` (hazard-rate) or ``"cont"`` (contingency).
         unit: ``"hidden"`` / ``"cell"`` (single-unit intervention) or ``None``
             (both-units intervention).
-        num_alphas: number of intervention strengths (DS4 default 11 → 0.0-1.0).
-        N: timesteps to window (DS4: 26 for hazard, 24 for contingency).
+        num_alphas: number of intervention strengths (11 → 0.0-1.0).
+        N: timesteps to window (26 for hazard, 24 for contingency).
 
     Returns:
         Long DataFrame with columns
@@ -704,24 +720,22 @@ def intervention_prediction_frame(
 # --------------------------------------------------------------------------- #
 # fig7 — gate-rescue intervention frames + delta-gate-activity scatters
 # --------------------------------------------------------------------------- #
-# Ported (internals verbatim) from
-# ``hmdcpd-analysis/notebooks/DS6.2-Interventions-and-Gates.py`` (gate-frozen
-# "rescue" interventions, ``process_model_predictions`` ``:561``) and
-# ``DS6.4-Relative-Gate-Activities.py`` (per-model / per-unit delta gate
-# activity, ``:507-696``). Both read the "all-states" intervention caches under
-# ``data/cache/interventions/`` and are keyed on ids/params only (SPEC rule 8);
-# arrays are loaded internally, never passed in.
+# Ported (internals verbatim) from the exploratory analysis notebooks in the
+# sibling ``hmdcpd-analysis`` repo: the gate-frozen "rescue" interventions and
+# the per-model / per-unit delta gate activity. Both read the "all-states"
+# intervention caches under ``data/cache/interventions/`` and are keyed on
+# ids/params only; arrays are loaded internally, never passed in.
 
 
 def _gate_frozen_npz_name(
     stat: str, unit: str | None, gate: tuple[str, ...], num_alphas: int
 ) -> str:
-    """Reconstruct DS6.2 ``process_model_predictions``'s gate-frozen npz name.
+    """Reconstruct the cached gate-frozen intervention npz name.
 
     ``{stat}[-{unit}]-{load_gate}-gate[s]-frozen-centroid-interventions-
     {num_alphas}-all-states-alphas.npz`` where ``load_gate`` is the gate letters
     sorted and joined (e.g. ``('i','f')`` → ``"fi"``) and the ``-s`` suffix on
-    ``gate`` appears only for multi-gate freezes (DS6.2 ``:590-592``).
+    ``gate`` appears only for multi-gate freezes.
     """
     load_gate = "".join(sorted(gate))
     frozen = f"gate{'s' if len(load_gate) > 1 else ''}-frozen"
@@ -755,16 +769,15 @@ def gate_rescue_prediction_frame(
     gate-frozen "all-states" cache
     (``interventions/{model_name}/{exp_id}/{stat}-{unit}-{load_gate}-gates-
     frozen-...-all-states-alphas.npz``) where the named gates are held at their
-    control value while the centroid intervention runs. Ported verbatim from
-    DS6.2's ``process_model_predictions`` (the ``preds`` → melted-frame path,
-    ``:628-644``); ``states``/``gates`` in the npz are ignored here (they feed
-    the separate gate-activity transform).
+    control value while the centroid intervention runs. Ported verbatim from the
+    source notebooks' ``preds`` → melted-frame path; ``states``/``gates`` in the
+    npz are ignored here (they feed the separate gate-activity transform).
 
     Args:
         gate: gate letters to freeze (e.g. ``("i", "f")``). Passed as a tuple so
             the cache key stays hashable.
-        num_alphas: number of intervention strengths (DS6.2 default 11).
-        N: timesteps to window before each trial endpoint (DS6.2 rescue: 29).
+        num_alphas: number of intervention strengths (11).
+        N: timesteps to window before each trial endpoint (29 for the gate-rescue cache).
 
     Returns:
         Long DataFrame with the same columns as
@@ -828,8 +841,7 @@ def gate_activity_delta_frame(
 ) -> pd.DataFrame:
     """Per-model, per (color_entered × unit) delta gate activity (fig7, memoized).
 
-    Reconstructs DS6.4's ``plot_df_1`` (``:678-696``): for every model, the
-    signed change in each LSTM gate's per-unit activity between the two extreme
+    For every model, the signed change in each LSTM gate's per-unit activity between the two extreme
     centroid interventions (alpha 0 → 1), oriented so the delta always reads
     "High Hz minus Low Hz" — i.e. toward the target hazard rate. Both fig7 gate
     scatters derive from this single frame:
@@ -840,17 +852,17 @@ def gate_activity_delta_frame(
       ``frame.groupby(["color_entered", "model"])[["i","f","g","o"]].mean()``
       (30 rows = 3 colours × 10 models).
 
-    Ported verbatim from DS6.4: the per-model ``df_ints`` build (``:427-460``),
-    the delta computation (``:653-674``), and the per-unit melt/merge
-    (``:678-694``). Only the plain "all-states" cell-unit cache
+    Ported verbatim from the source notebook's per-model intervention build,
+    delta computation, and per-unit melt/merge. Only the plain "all-states"
+    cell-unit cache
     (``hz-cell-centroid-interventions-{num_alphas}-all-states-alphas.npz``) is
     read; only its ``gates`` array is loaded (the ~4 GB per model), keyed on
-    ids/params (SPEC rule 8).
+    ids/params.
 
     The restriction to ``idx_time == 2`` trials, ``alpha ∈ {0, 1}`` and the last
     ``len_gray`` valid timesteps is applied *before* materializing rows — this is
-    output-identical to DS6.4 (which builds the full frame then filters at
-    ``:659``) but avoids holding hundreds of thousands of unused rows.
+    output-identical to the source (which builds the full frame then filters)
+    but avoids holding hundreds of thousands of unused rows.
 
     Returns:
         DataFrame with columns ``[color_entered, unit_idx, i, f, g, o, model]``.
@@ -862,7 +874,7 @@ def gate_activity_delta_frame(
     array_color = np.array(["Red", "Green", "Blue"])
     idx_time2 = meta["idx_time"].values == 2
 
-    # centroid index → intervention target hazard rate (DS6.4 dict_ints_name).
+    # centroid index → intervention target hazard rate.
     dict_ints_name = {0: "Low", 1: "High"}
     alpha_idxs = [0, num_alphas - 1]
 
@@ -911,7 +923,7 @@ def gate_activity_delta_frame(
         df_ints = pd.concat(blocks, ignore_index=True)
         del gates
 
-        # Signed delta toward the target hazard rate (DS6.4 :653-674).
+        # Signed delta toward the target hazard rate.
         list_dfs = []
         for (hz, target_hz), df_hz in df_ints.groupby(["Hazard Rate", "target_hz"]):
             if hz == target_hz:
@@ -936,7 +948,7 @@ def gate_activity_delta_frame(
             list_dfs.append(df_delta)
         df_delta_ints = pd.concat(list_dfs)
 
-        # Per-colour mean over units → one row per (colour, unit) (DS6.4 :679-694).
+        # Per-colour mean over units → one row per (colour, unit).
         mean_df = df_delta_ints.groupby("color_entered")[columns_gates].mean()
         gate_dfs = []
         for gate, cols in dict_column_gates.items():

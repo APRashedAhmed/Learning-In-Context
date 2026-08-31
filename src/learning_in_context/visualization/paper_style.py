@@ -1,13 +1,13 @@
 """Shared paper-figure style: theme, palette, sizes, and panel export.
 
-Single source of truth for the paper's figure conventions (figures/SPEC.md).
-Every figure script in ``figures/`` calls :func:`apply_style` in its style cell
-and exports each panel with :func:`save_panel`.
+Single source of truth for the paper's figure conventions. Every figure script
+in ``figures/`` calls :func:`apply_style` in its style cell and exports each
+panel with :func:`save_panel`.
 
-Size discipline (SPEC rule 3): panels are exported at FINAL physical size —
-``figsize`` in real inches from the size vocabulary below, fonts at final point
-size. In Illustrator, place panels at 100% and never rescale; a panel that
-does not fit gets its ``figsize`` changed here/in its script and re-exported.
+Size discipline: panels are exported at FINAL physical size — ``figsize`` in
+real inches from the size vocabulary below, fonts at final point size. When
+composing the figure, place panels at 100% and never rescale; a panel that does
+not fit gets its ``figsize`` changed here/in its script and re-exported.
 """
 
 from pathlib import Path
@@ -20,15 +20,15 @@ from matplotlib import font_manager
 FULL_WIDTH = 7.0
 HALF_WIDTH = 3.4
 THIRD_WIDTH = 2.25
-PANEL_SQUARE = (3.0, 3.0)  # matches the DS/figure notebooks' default figsize
-PANEL_TUNING = (2.5, 3.0)  # matches figsize_tuning in the activity notebooks
+PANEL_SQUARE = (3.0, 3.0)  # default panel figsize inherited from the analysis notebooks
+PANEL_TUNING = (2.5, 3.0)  # tuning-profile figsize inherited from the activity notebooks
 
 # --- Fonts ---
-# SPEC operator ruling 2 (2026-08-28): the decks used Arial, but the shipped
-# figure font is Liberation Sans (metric-compatible, SIL-OFL — freely
-# redistributable), VENDORED in ``fonts/`` beside this module and registered
-# AHEAD of Arial so rendering never depends on system fonts. Illustrator
-# machines need Liberation Sans installed too.
+# The paper's figure font is Liberation Sans (metric-compatible with Arial,
+# SIL-OFL — freely redistributable), VENDORED in ``fonts/`` beside this module
+# and registered AHEAD of Arial so rendering never depends on system fonts.
+# Whichever machine composes the final figures needs Liberation Sans installed
+# too, so the live SVG text keeps its metrics.
 FONT_FAMILY = ["Liberation Sans", "Arial", "sans-serif"]
 _FONTS_DIR = Path(__file__).resolve().parent / "fonts"
 
@@ -75,7 +75,7 @@ PANELS_DIR = _REPO_ROOT / "figures" / "panels"
 
 
 def _register_fonts() -> None:
-    """Register the vendored Liberation Sans faces (SPEC ruling 2).
+    """Register the vendored Liberation Sans faces.
 
     ``font_manager.fontManager.addfont`` registers each vendored ``.ttf`` for
     this process, so the primary family resolves identically on every machine
@@ -95,10 +95,10 @@ def apply_style() -> None:
             "figure.dpi": 200,
             "font.family": "sans-serif",
             "font.sans-serif": FONT_FAMILY,
-            # Live text in SVG exports so Illustrator can edit labels
-            # (matplotlib's default outlines text to paths). SPEC rule 2.
+            # Live text in SVG exports so a vector editor can edit labels
+            # (matplotlib's default outlines text to paths).
             "svg.fonttype": "none",
-            # TrueType (Type 42) if PDF output is ever added. SPEC rule 2.
+            # TrueType (Type 42) so text stays live if PDF output is ever added.
             "pdf.fonttype": 42,
         }
     )
@@ -107,8 +107,8 @@ def apply_style() -> None:
 def save_panel(fig, fig_no: int | str, name: str) -> Path:
     """Export one panel as live-text SVG to ``figures/panels/fig<N>/<name>.svg``.
 
-    Panel names are stable identifiers — Illustrator compositions link to these
-    paths, so never rename an existing output (SPEC rule 5).
+    Panel names are stable identifiers — the composed figure links to these
+    paths, so never rename an existing output.
 
     Args:
         fig: The matplotlib figure holding exactly this panel.

@@ -1,16 +1,12 @@
-"""Integration tests for the NOT-YET-WRITTEN ``figures/fig6_interventions.py``
-(figures/SPEC.md procedure step 4: port from ``DS4-Interventions.py``).
+"""Integration tests for ``figures/fig6_interventions.py``.
 
-Panel inventory (from ``google-drive/paper/png/Fig 6 - Crit Units Func-1.png``,
-the fig6 deck's page 1 -- SPEC scopes each figure to page 1 of its deck)
-==========================================================================
-Page 1 is a lettered A + G..N layout:
+Panel inventory
+===============
+Figure 6 is a lettered A + G..N layout:
 
-  A - "Schematic of intervention pipeline": hand-drawn placeholder box (plain
-      text on a bordered rectangle, no plotted data). Per SPEC's fig1
-      treatment ("hand-drawn schematic; no script needed") and the
-      fig4/fig5-contract precedent (schematic boxes ruled OUT there), this is
-      Illustrator compose-time art -- NOT a generated panel. EXCLUDED.
+  A - "Schematic of intervention pipeline": a hand-drawn schematic (plain text
+      on a bordered rectangle, no plotted data), composed externally. No script
+      generates it. EXCLUDED.
 
   Hazard-rate block (G/H, I/J):
     G - "Hidden Unit Intervention: Low to High Hz" / "... High to Low Hz" --
@@ -37,24 +33,20 @@ Page 1 is a lettered A + G..N layout:
         RENDERED -> IN.
     M - "Cell Unit Intervention: Low to High Cont" / "... High to Low Cont".
         RENDERED -> IN.
-    N - "All Models Hidden\nUnit Interventions" point plot **as rendered in
-        the deck** -- but this is the published copy-paste bug (SPEC ruling
-        9): the underlying data is the CELL-unit contingency point plot
-        (built from ``dict_model_pred_dfs_melted_bounce_cont_c``, the same
-        "_c" cell-state frame that feeds M), not hidden-unit data. Operator
-        ruling 9 (2026-08-28): correct panel N's title to "All Models Cell
-        Unit Interventions" in the port -- a DELIBERATE, DOCUMENTED DEVIATION
-        from the deck image. This is the ONE title this test asserts must
-        differ from the literal deck text.
+    N - "All Models Hidden\nUnit Interventions" point plot **as published** --
+        but that title is a copy-paste bug: the underlying data is the
+        CELL-unit contingency point plot, built from the same cell-state
+        contingency frame that feeds M, not hidden-unit data. The port
+        corrects panel N's title to "All Models Cell Unit Interventions" -- a
+        deliberate, documented deviation from the published image, and the ONE
+        title this test asserts must differ from it.
 
-Panel -> stable semantic SVG name (SPEC rule 5), under ``figures/panels/fig6/``.
-Following the fig5-contract precedent (each deck box = ONE self-contained SVG,
-even where the DS source composes two condition-order subplots -- Low-to-X /
-High-to-X -- sharing a single legend column via ``plot_interventions_rows``'s
-gridspec; SPEC rule 1's "own axes, labels, legend" is read at deck-box
-granularity, matching the fig5 checkpoint's already-blessed
-``render_timecourse`` shape rather than forcing a further split the deck
-itself never draws):
+Panel -> stable semantic SVG name, under ``figures/panels/fig6/``. Each panel
+of the composed figure is ONE self-contained SVG, even where the source
+composes two condition-order subplots -- Low-to-X / High-to-X -- sharing a
+single legend column via a gridspec. "Own axes, labels, legend" is read at
+composed-panel granularity, matching fig5's ``render_timecourse`` shape rather
+than forcing a further split the published figure never draws:
 
   G -> intervention_timecourse_hz_hidden.svg
   H -> summary_pointplot_hz_hidden.svg
@@ -63,95 +55,69 @@ itself never draws):
   K -> intervention_timecourse_ct_hidden.svg
   L -> summary_pointplot_ct_hidden.svg
   M -> intervention_timecourse_ct_cell.svg
-  N -> summary_pointplot_ct_cell.svg   (title corrected per ruling 9)
+  N -> summary_pointplot_ct_cell.svg   (title corrected, see above)
 
-Source mapping (SPEC's fig6 row + figure-to-code-map.md's 2026-08-28 scout
-audit "Pre-flight corrections" -- ``DS*`` = hmdcpd-analysis/notebooks/):
-  * Time-course renderer: ``plot_interventions_rows`` (``DS4-Interventions.py``
-    :522) -- the "Target"/"Intervention" legend titles are literal strings in
-    this function (:597 ``ref_title = f'Target'``; the dashed-vline legend at
-    :608 is literally ``'Intervention'``), confirmed against the deck legend
-    crop (Alpha / Target / Intervention, exactly as rendered) -- this is NOT
-    the sibling singular-panel ``plot_interventions`` (:421), whose reference
-    legend instead computes a "{Cond} {Hz|Cont}" title and is used only for
-    the bounce/control-trial cells that are out of scope for page 1.
-  * G data/call: ``:1137-1147`` (hz, hidden -- ``dict_model_pred_dfs_melted_straight_hz_h``,
-    ``title="Hidden Unit Intervention:\n"``).
-  * I data/call: ``:1265-1276`` (hz, cell -- ``dict_model_pred_dfs_melted_straight_hz_c``,
-    ``title="Cell Unit Intervention:\n"``).
-  * K data/call: ``:1397-1408`` (cont, hidden -- ``dict_model_pred_dfs_melted_bounce_cont_h``,
-    ``title="Hidden Unit Intervention:\n"``).
-  * M data/call: ``:1497-1508`` (cont, cell -- ``dict_model_pred_dfs_melted_bounce_cont_c``,
-    ``title="Cell Unit Intervention:\n"``).
-  * Summary point plots each have TWO live source cells per the scout audit;
-    port the polished FINALS only (the early drafts at ``:820-836``/``:1332-1339``
-    use stale "Intervention Strength (Alpha)"/"Final Color Change Probability"
-    axis wording -- do NOT port that wording):
-      H final: ``:1176-1216`` -- ``plt.title('All Models Hidden\nUnit Interventions')``.
-      J final: ``:1278-1318`` -- ``plt.title('All Models Cell\nUnit Interventions')``.
-      L final: ``:1410-1450`` -- ``plt.title('All Models Hidden\nUnit Interventions')``
-          (correctly "Hidden" as rendered -- this IS hidden-unit data; no
-          deviation here).
-      N final: ``:1510-1551`` -- ``plt.title('All Models Hidden\nUnit Interventions')``
-          in DS4 (and the deck), but built from the cell-state contingency
-          frame (``dict_model_pred_dfs_melted_bounce_cont_c``, the same input
-          M uses) -- ruling 9 corrects this to "Cell" in the port.
+Provenance
+----------
+The panels are ported from the exploratory analysis notebooks in the sibling
+``hmdcpd-analysis`` repo:
+
+  * Time-course renderer: the source's multi-row intervention renderer, whose
+    "Target"/"Intervention" legend titles are literal strings in that function
+    (matching the published legend column: Alpha / Target / Intervention). This
+    is NOT its sibling single-panel renderer, whose reference legend instead
+    computes a "{Cond} {Hz|Cont}" title and serves the bounce/control-trial
+    cells the paper does not show.
+  * G/I: hazard-rate hidden/cell straight-trial frames, titled "Hidden Unit
+    Intervention:" / "Cell Unit Intervention:".
+  * K/M: contingency hidden/cell bounce-trial frames, same titles.
+  * Summary point plots: the source has both early drafts and polished final
+    cells; only the finals are ported. The drafts' stale "Intervention Strength
+    (Alpha)" / "Final Color Change Probability" axis wording is deliberately
+    NOT carried over.
+      H: "All Models Hidden\nUnit Interventions".
+      J: "All Models Cell\nUnit Interventions".
+      L: "All Models Hidden\nUnit Interventions" -- correctly "Hidden"; this IS
+         hidden-unit data, so no deviation.
+      N: published as "All Models Hidden\nUnit Interventions" but built from
+         the cell-state contingency frame (the same input M uses); the port
+         corrects it to "Cell".
   * All four summary point plots share: ``x='Alpha'`` (raw index rescaled to
-    0.0-1.0 via dynamic xticks, not the old ``FuncFormatter(x * 0.1)`` used by
-    the early-draft cells), ``y='Value'`` -> ylabel ``'P(Final Color Change)'``,
-    ``hue='Type'`` with palette order ``['L2L', 'L2H', 'H2L', 'H2H']`` and
-    ``Type`` values computed as e.g. ``'L' if <cond>=='Low' else 'H'`` + ``'2'``
-    + ``'L' if Centroid==0 else 'H'`` (so the rendered legend/data entries are
-    literally ``L2L``/``L2H``/``H2L``/``H2H`` -- this test asserts all four are
-    present, not the palette's declared order, since seaborn's actual legend
-    order follows the data's hue order which this test does not independently
-    re-derive).
+    0.0-1.0 via dynamic xticks, not the early drafts' ``FuncFormatter(x*0.1)``),
+    ``y='Value'`` -> ylabel ``'P(Final Color Change)'``, ``hue='Type'`` with
+    palette order ``['L2L', 'L2H', 'H2L', 'H2H']`` and ``Type`` values computed
+    as e.g. ``'L' if <cond>=='Low' else 'H'`` + ``'2'`` + ``'L' if Centroid==0
+    else 'H'`` (so the rendered legend/data entries are literally
+    ``L2L``/``L2H``/``H2L``/``H2H``). This test asserts all four are present,
+    not the palette's declared order, since seaborn's legend order follows the
+    data's hue order, which this test does not independently re-derive.
 
-Judgment calls for verifier attention
---------------------------------------
-  * HZ/CT casing: the deck's literal title text reads "...Hz" / "...Cont"
-    (mixed case, straight from DS4's ``stat_short = 'Hz' if 'hazard' in
-    stat.lower() else 'Cont'``). SPEC ruling 6 (2026-08-28, fig5 checkpoint)
-    states "Condition shorthand is 'CT' ... the deck's 'Cont' labels do NOT
-    override this," and the ALREADY-IMPLEMENTED ``fig5_unit_activity.py``
-    applies this as a general paper_style convention -- it passes literal
-    ``"HZ"`` (uppercase) for hazard-rate titles too, not just "CT" for
-    contingency (see ``fig5_unit_activity.py:271,365,458``). Ruling 6 was
-    worded under the "fig5 checkpoint" heading, not explicitly re-stated for
-    fig6, but ``paper_style.SHORTENED_CONDITIONS`` is a shared module-level
-    constant, not fig5-scoped, and this test treats the fig5 precedent as
-    binding for consistency across the paper's panels. This test therefore
-    asserts uppercase ``"HZ"``/``"CT"`` in fig6's time-course titles (not the
-    deck's literal "Hz"/"Cont" mixed case) -- flagged here as a judgment call
-    the verifier should confirm rather than silently accept.
-  * Ruling 9 is scoped narrowly to panel N's *title* text ("correct panel N's
-    title to 'All Models Cell Unit Interventions'"). This test does NOT
-    require the underlying implementation to literally reuse M's cached
-    dataframe/transform for N (an implementation-detail choice for whichever
-    agent ports it) -- only that the rendered SVG's title text says "Cell",
-    not "Hidden".
+Scope notes
+-----------
+  * HZ/CT casing: the published title text reads "...Hz" / "...Cont" (mixed
+    case, straight from the source). The paper's condition shorthand is
+    uppercase ``HZ``/``CT``, defined once in
+    ``paper_style.SHORTENED_CONDITIONS`` and applied across every figure
+    script, so this test asserts uppercase in fig6's time-course titles.
+  * The panel-N title correction is scoped to the *title* text. This test does
+    not require the implementation to literally reuse M's cached
+    dataframe/transform for N -- only that the rendered SVG's title says
+    "Cell", not "Hidden".
   * The G/I/K/M time-course panels are NOT split into per-condition
-    (Low-to-High vs. High-to-Low) SVGs even though SPEC rule 1 nominally
-    reads as one-axes-per-panel. This mirrors the fig5-contract's already-
-    blessed ``render_timecourse`` shape (1x2 subplots, one shared legend
-    column) and is treated as the settled precedent rather than re-litigated
-    here; a verifier who disagrees should flag it explicitly, since it
-    affects EXPECTED_PANELS' count and names.
-  * "All Models" scope: ``data/cache/interventions/`` (SPEC's data-readiness
-    note) holds LSTM-only per-model intervention artifacts (10
-    ``san-*`` models under ``interventions/lstm/``) -- no ``interventions/rnn/``
-    directory exists. Hidden/cell-state interventions are LSTM-specific (RNN
-    has no separate cell state), so "All Models" here plausibly means "all
-    LSTM models," consistent with the cached data actually present. This test
-    does not assert a specific model count (e.g. "10 models") since that is a
-    data-fidelity claim, not a panel-existence/content claim.
-  * fig5's shared-transform naming precedent (SPEC rule 8's "known
-    shared-from-day-one": "the per-model intervention frames (DS6.2 + DS6.4
-    both build them from interventions/)") is exercised indirectly here via
-    ``TestTransformMemoization`` (cache-dir populated after a headless run),
-    mirroring fig4/fig5's contract -- this test does not pin the shared
-    transform's exact name/signature (that is ``transforms.py``'s contract,
-    covered by ``tests/test_fig_transforms.py``).
+    (Low-to-High vs. High-to-Low) SVGs. One SVG per panel of the composed
+    figure is the granularity, matching fig5's ``render_timecourse`` shape
+    (1x2 subplots, one shared legend column).
+  * "All Models" scope: ``data/cache/interventions/`` holds LSTM-only per-model
+    intervention artifacts (10 ``san-*`` models under ``interventions/lstm/``);
+    there is no ``interventions/rnn/`` directory. Hidden/cell-state
+    interventions are LSTM-specific (a plain RNN has no separate cell state),
+    so "All Models" means all LSTM models. This test does not assert a specific
+    model count, which is a data-fidelity claim rather than a panel-content one.
+  * The per-model intervention frames are shared with fig7, so they live in
+    ``transforms.py`` as one memoized transform. That sharing is exercised
+    indirectly here via ``TestTransformMemoization`` (cache dir populated after
+    a headless run); the transform's name and signature are pinned by
+    ``tests/test_fig_transforms.py``, not here.
 """
 
 from __future__ import annotations
@@ -175,7 +141,7 @@ EXPECTED_PANELS = [
     "intervention_timecourse_ct_hidden.svg",   # K
     "summary_pointplot_ct_hidden.svg",         # L
     "intervention_timecourse_ct_cell.svg",     # M
-    "summary_pointplot_ct_cell.svg",           # N (ruling 9: title says "Cell")
+    "summary_pointplot_ct_cell.svg",           # N (title corrected to "Cell")
 ]
 
 # Time-course panels: line subplots, P(Color Change) vs Timestep, Alpha ramp.
@@ -191,10 +157,10 @@ POINTPLOT_TITLES = {
     "summary_pointplot_hz_hidden.svg": "All Models Hidden",   # H
     "summary_pointplot_hz_cell.svg": "All Models Cell",       # J
     "summary_pointplot_ct_hidden.svg": "All Models Hidden",   # L
-    # N: ruling 9 -- the deck/DS4 literally say "Hidden" here (a published
-    # copy-paste bug plotting cell-unit contingency data); the port must say
+    # N: the published panel and its source literally say "Hidden" here (a
+    # copy-paste bug over cell-unit contingency data); the port must say
     # "Cell". This is the one title this test requires to DIFFER from the
-    # deck's literal text.
+    # published text.
     "summary_pointplot_ct_cell.svg": "All Models Cell",       # N
 }
 
@@ -211,10 +177,10 @@ def fig6_run(tmp_path_factory):
     memoization contract without depending on -- or polluting -- the real
     ``data/cache/fig_transforms``. Panel SVGs, by contrast, are written to the
     REAL ``figures/panels/fig6/`` -- that is the actual deliverable this
-    script exists to produce (SPEC architecture table), not a test fixture.
+    script exists to produce, not a test fixture.
 
-    fig6 is render-only (SPEC rule 4 -- unlike fig4, it has no tolerated
-    inline-compute exception; all its inputs already exist under
+    fig6 is render-only -- unlike fig4 it has no inline compute; all its
+    inputs already exist under
     ``data/cache/interventions/``), so this uses fig5's 600s timeout rather
     than fig4's 1800s.
     """
@@ -237,7 +203,7 @@ class TestHeadlessRun:
     def test_script_exists(self):
         # Fails clearly ("script not found") ahead of the subprocess call,
         # rather than as an opaque non-zero-exit / "No such file" surprise.
-        assert FIG6_SCRIPT.exists(), f"not yet written: {FIG6_SCRIPT}"
+        assert FIG6_SCRIPT.exists(), f"figure script not found: {FIG6_SCRIPT}"
 
     def test_exits_zero(self, fig6_run):
         result, _ = fig6_run
@@ -267,8 +233,8 @@ class TestPanelOutputs:
 
     @pytest.mark.parametrize("panel_name", EXPECTED_PANELS)
     def test_panel_is_a_single_self_contained_svg(self, fig6_run, panel_name):
-        # Cheap proxy for "panel, not a composed multi-panel grid" (SPEC
-        # rule 1) -- exactly one <svg> root element in the document. Note
+        # Cheap proxy for "panel, not a composed multi-panel grid" -- exactly
+        # one <svg> root element in the document. Note
         # this does NOT forbid multiple <g>/<axes> groups inside that one
         # root -- G/I/K/M's shared-legend 1x2 subplot layout (fig5 precedent,
         # see module docstring) still exports as a single <svg> document.
@@ -294,7 +260,7 @@ class TestPanelOutputs:
 
 
 class TestTimecourseContent:
-    """Deck-verified text for panels G/I/K/M (intervention time-courses).
+    """Published text for panels G/I/K/M (intervention time-courses).
 
     Shared axis/legend vocabulary: y-axis "P(Color Change)", x-axis
     "Timestep", an "Alpha" legend (viridis ramp over 0.0-0.9), a "Target"
@@ -354,15 +320,15 @@ class TestTimecourseContent:
 
 
 class TestSummaryPointPlotContent:
-    """Deck-verified text for panels H/J/L/N (summary point plots).
+    """Published text for panels H/J/L/N (summary point plots).
 
     Shared axis/legend vocabulary: x-axis "Alpha", y-axis "P(Final Color
     Change)", a "Type" hue legend with entries L2L/H2L/L2H/H2H. Titles read
     "All Models <Hidden|Cell>\\nUnit Interventions" -- EXCEPT panel N, whose
-    deck/DS4 title literally says "Hidden" (a published copy-paste bug over
-    cell-unit contingency data) and which SPEC ruling 9 requires be corrected
-    to "Cell" in the port. That correction is this module's one deliberate
-    deck-text deviation (see POINTPLOT_TITLES and the module docstring).
+    published title says "Hidden" (a copy-paste bug over cell-unit contingency
+    data) and which the port corrects to "Cell". That correction is this
+    module's one deliberate deviation from the published text (see
+    POINTPLOT_TITLES and the module docstring).
     """
 
     @pytest.mark.parametrize("panel_name", list(POINTPLOT_TITLES))
@@ -390,19 +356,19 @@ class TestSummaryPointPlotContent:
             f"{panel_name} missing 'Unit Interventions' title text"
         )
 
-    def test_panel_n_title_deviates_from_deck_and_says_cell(self, fig6_run):
-        # SPEC ruling 9, restated: the deck literally renders "All Models
-        # Hidden\nUnit Interventions" for panel N even though the underlying
-        # data is cell-unit contingency data (the same frame M plots). The
-        # port must NOT reproduce the deck's literal "Hidden" text here.
+    def test_contingency_cell_pointplot_title_says_cell(self, fig6_run):
+        # The published panel N renders "All Models Hidden\nUnit
+        # Interventions" even though the underlying data is cell-unit
+        # contingency data (the same frame M plots). The port must NOT
+        # reproduce that "Hidden" text here.
         panel_path = PANELS_DIR / "summary_pointplot_ct_cell.svg"
         if not panel_path.exists():
             pytest.skip("panel not written; see test_writes_expected_panel")
         content = panel_path.read_text()
         assert "All Models Cell" in content, (
             "panel N (summary_pointplot_ct_cell.svg) must read "
-            "'All Models Cell Unit Interventions' per SPEC ruling 9, "
-            "correcting the deck's published 'Hidden' copy-paste bug"
+            "'All Models Cell Unit Interventions', correcting the "
+            "published 'Hidden' copy-paste bug"
         )
 
 
@@ -415,7 +381,6 @@ class TestTransformMemoization:
         cached_files = [p for p in cache_dir.rglob("*") if p.is_file()]
         assert cached_files, (
             f"transform cache dir {cache_dir} has no cached results -- fig6's "
-            "per-model intervention frames are SPEC rule 8's explicit "
-            "known-shared-from-day-one transform and must be memoized via "
-            "transforms.py's joblib Memory"
+            "per-model intervention frames are shared with fig7 and must be "
+            "memoized via transforms.py's shared joblib Memory"
         )

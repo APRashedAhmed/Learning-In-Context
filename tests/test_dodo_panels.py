@@ -1,4 +1,4 @@
-"""Structural tests for the ``task_panels`` doit task (figures/SPEC.md step 5).
+"""Structural tests for the ``task_panels`` doit task.
 
 Checks the shape of the task graph — sub-task names and declared targets —
 via ``doit list``/``doit info``, without ever executing the figure-rendering

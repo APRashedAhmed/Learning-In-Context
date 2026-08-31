@@ -1,49 +1,47 @@
 """Figure 7 — network-gate panels (marimo, dual-use).
 
-Ported into the paper-figure pipeline defined by ``figures/SPEC.md`` from three
-``hmdcpd-analysis`` notebooks (page-1 scope of the fig7 deck
-``google-drive/paper/png/Fig 7 - Network Gates-1.png``; contract in
-``tests/test_fig7_panels.py``). Four panels are rendered (deck block A, the
-hand-drawn "rescue" schematic, is Illustrator compose-time art — excluded):
+Ported into the paper-figure pipeline from three exploratory analysis notebooks
+in the sibling ``hmdcpd-analysis`` repo (contract in
+``tests/test_fig7_panels.py``). Four panels are rendered; panel A, the
+hand-drawn "rescue" schematic, is composed externally:
 
-    cell_unit_interventions_all_models.svg  (deck B, left)
+    cell_unit_interventions_all_models.svg  (panel B, left)
         REUSED cell-unit intervention point plot — same rendered content as
         fig6's "All Models Cell Unit Interventions" panel, exported into fig7's
-        own namespace (SPEC ruling 10 / rule 5). Ported from
-        ``DS4-Interventions.py:1279-1313`` via the shared, memoized
-        ``transforms.intervention_prediction_frame`` (landed with fig6).
+        own namespace because panel paths are per-figure and stable. Built via
+        the shared, memoized ``transforms.intervention_prediction_frame``
+        (landed with fig6).
 
-    gate_rescue_input_forget.svg            (deck B, right)
+    gate_rescue_input_forget.svg            (panel B, right)
         Gate-frozen ("rescue") intervention point plot for the ``(i, f)`` gate
-        pair — the only pair in page-1 scope. Ported from
-        ``DS6.2-Interventions-and-Gates.py:814-920`` via the new memoized
+        pair — the only pair the paper shows. Built via the memoized
         ``transforms.gate_rescue_prediction_frame`` (gate-frozen "all-states"
-        cache, N=29). The title uses the deck's unquoted ``(i, f)`` form rather
-        than the source f-string's raw Python tuple repr (contract judgment call).
+        cache, N=29). The title formats the gate pair explicitly as
+        ``(i, f)``; interpolating the raw Python tuple would render its repr
+        with quotes.
 
-    gate_scatter_delta_forget_input.svg           (deck bottom-left)
+    gate_scatter_delta_forget_input.svg           (bottom-left)
         Untitled single-exemplar-model (``san-4604``) delta-gate scatter,
-        Delta Forget vs Delta Input, one point per (colour × unit). Ported from
-        ``DS6.4-Relative-Gate-Activities.py:568-590``.
+        Delta Forget vs Delta Input, one point per (colour × unit).
 
-    gate_scatter_delta_forget_input_unit_mean.svg (deck bottom-right)
-        Aggregated unit-mean scatter, one point per (colour × model).
-        RECONSTRUCTED per SPEC ruling 10 from the stale backup
-        ``notebooks/marimo/DS6.4-Relative-Gate-Activities.py:1150-1195`` (no live
-        DS6.4 cell survives); its input frame ``plot_df_1`` is still live at
-        current ``DS6.4:678-696``. Both scatters derive from one memoized
-        ``transforms.gate_activity_delta_frame`` (== ``plot_df_1``): the
-        single-model panel is the ``san-4604`` slice, the aggregated panel is the
+    gate_scatter_delta_forget_input_unit_mean.svg (bottom-right)
+        Aggregated unit-mean scatter, one point per (colour × model). No live
+        source cell survives for this panel; it was reconstructed from an older
+        copy of the source notebook, whose input frame is still live in the
+        current one. Both scatters derive from one memoized
+        ``transforms.gate_activity_delta_frame``: the single-model panel is the
+        ``san-4604`` slice, the aggregated panel is the
         ``groupby(color_entered, model).mean()``.
 
-Both point plots reuse fig6's render recipe (ported here, not imported — SPEC
-"port, never import"). Style comes from ``paper_style.apply_style`` (SPEC rule 2:
-live-text SVG); transform cells are split from render cells; each deck box is
-one self-contained SVG via ``save_panel`` (SPEC rule 1).
+Both point plots reuse fig6's render recipe, ported here rather than imported —
+figure scripts stay independently readable and never import one another. Style
+comes from ``paper_style.apply_style`` (live-text SVG); transform cells are
+split from render cells; each panel of the composed figure is one
+self-contained SVG via ``save_panel``.
 
-Dual use (SPEC rule 7): ``marimo edit figures/fig7_gates.py`` for interactive
-work; ``python figures/fig7_gates.py`` runs every cell top-to-bottom and lands
-the 4 SVGs under ``figures/panels/fig7/``.
+Dual use: ``marimo edit figures/fig7_gates.py`` for interactive work; ``python
+figures/fig7_gates.py`` runs every cell top-to-bottom and lands the 4 SVGs
+under ``figures/panels/fig7/``.
 """
 
 import marimo
@@ -89,8 +87,8 @@ def _(np, paper_style):
     MODEL = "lstm"
 
     # All LSTM intervention models — the "All Models" point plots (same set as
-    # fig6). The single-model gate scatter uses san-4604 (DS6.4's hardcoded
-    # exemplar in df_ints_all).
+    # fig6). The single-model gate scatter uses san-4604, the exemplar the
+    # source notebook hardcoded.
     MODELS = (
         "san-4601", "san-4602", "san-4603", "san-4604", "san-4605",
         "san-4606", "san-4615", "san-4616", "san-4617", "san-4618",
@@ -100,12 +98,12 @@ def _(np, paper_style):
     NUM_ALPHAS = 11
     ALPHAS = np.linspace(0, 1, NUM_ALPHAS)
 
-    N_HZ = 26          # cell-unit intervention window (DS4/fig6)
-    N_RESCUE = 29      # gate-rescue window (DS6.2)
+    N_HZ = 26          # cell-unit intervention window (same as fig6)
+    N_RESCUE = 29      # gate-rescue window
     FINAL_T = 24       # final-timestep index the summary point plots collapse onto
-    GATE_PAIR = ("i", "f")  # only gate pair in page-1 scope
+    GATE_PAIR = ("i", "f")  # the only gate pair the paper shows
 
-    # Type-hue palette for the summary point plots (DS4/DS6.2 flare over
+    # Type-hue palette for the summary point plots (flare over
     # L2L/L2H/H2L/H2H).
     TYPE_ORDER = ["L2L", "L2H", "H2L", "H2H"]
     TYPE_PALETTE = get_color_palette(
@@ -144,13 +142,15 @@ def _(mo):
 
 @app.cell
 def _(np, plt, sns):
-    # Render helpers (pure styling — SPEC rule 1: each panel self-contained).
+    # Render helpers (pure styling — each panel is self-contained: its own
+    # axes, labels, and legend).
 
     def render_pointplot(frame, final_timestep, title, palette, figsize):
         """Summary point plot: P(Final Color Change) vs Alpha, hue=Type.
 
-        Ported from DS4's / DS6.2's polished FINAL point-plot cells (identical to
-        fig6.render_pointplot — ported here, not imported, per SPEC).
+        Ported from the source notebooks' final point-plot cells; identical to
+        fig6.render_pointplot, ported here rather than imported so each figure
+        script stays independently readable.
         """
         sub = frame[frame["Timestep"] == final_timestep]
         fig = plt.figure(figsize=figsize)
@@ -177,7 +177,7 @@ def _(np, plt, sns):
         return fig
 
     def add_type(frame):
-        # Type = <hazard>2<centroid>, e.g. 'L2H' (DS4/DS6.2). Centroid 0 -> 'L'.
+        # Type = <hazard>2<centroid>, e.g. 'L2H'. Centroid 0 -> 'L'.
         frame = frame.copy()
         frame["Type"] = (
             frame["Hazard Rate"].apply(lambda x: "L" if x == "Low" else "H")
@@ -189,9 +189,10 @@ def _(np, plt, sns):
     def render_gate_scatter(frame, figsize, title=None, label_suffix=""):
         """Delta Forget (x='f') vs Delta Input (y='i') gate scatter.
 
-        Ported verbatim from DS6.4 (``:568-590`` single-model; the reconstructed
-        ``:1170-1199`` backup adds the title and ``(unit-mean)`` label suffix).
-        Legend: colour_entered hue (Blue/Green/Red) + the dashed Unity diagonal.
+        Ported verbatim from the source notebook's single-model cell; the
+        reconstructed unit-mean variant adds the title and the ``(unit-mean)``
+        label suffix. Legend: colour_entered hue (Blue/Green/Red) + the dashed
+        Unity diagonal.
         """
         gate_x, gate_y = "f", "i"
         fig = plt.figure(figsize=figsize)
@@ -222,11 +223,11 @@ def _(np, plt, sns):
 
 
 # ---------------------------------------------------------------------------
-# Deck B — "All Models" intervention point plots
+# Panel B — "All Models" intervention point plots
 # ---------------------------------------------------------------------------
 @app.cell
 def _(mo):
-    mo.md(r"""## Intervention point plots (deck B)""")
+    mo.md(r"""## Intervention point plots (panel B)""")
     return
 
 
@@ -247,8 +248,8 @@ def _(
     transforms,
 ):
     def _():
-        # B, left — reused cell-unit interventions panel (SPEC ruling 10; same
-        # recipe as fig6's summary_pointplot_hz_cell, from DS4:1279-1313).
+        # B, left — reused cell-unit interventions panel: same recipe as
+        # fig6's summary_pointplot_hz_cell, exported under fig7's own name.
         frames = []
         for exp_id in MODELS:
             f = transforms.intervention_prediction_frame(
@@ -289,7 +290,7 @@ def _(
     transforms,
 ):
     def _():
-        # B, right — (i, f) gate-frozen "rescue" interventions (DS6.2:814-920).
+        # B, right — (i, f) gate-frozen "rescue" interventions.
         frames = []
         for exp_id in MODELS:
             f = transforms.gate_rescue_prediction_frame(
@@ -299,8 +300,8 @@ def _(
             f = f[(f["trial"] == "Straight") & (f["idx_time"] == 2)]
             frames.append(add_type(f))
         frame = pd.concat(frames, ignore_index=True)
-        # Deck's unquoted, comma-space gate-pair label (NOT the source
-        # f-string's raw tuple repr "('i', 'f')") — contract judgment call.
+        # Unquoted, comma-space gate-pair label, as published — interpolating
+        # the raw tuple would render its repr, "('i', 'f')".
         pair = f"({GATE_PAIR[0]}, {GATE_PAIR[1]})"
         fig = render_pointplot(
             frame, FINAL_T,
@@ -317,11 +318,11 @@ def _(
 
 
 # ---------------------------------------------------------------------------
-# Deck bottom — delta gate-activity scatters
+# Bottom row — delta gate-activity scatters
 # ---------------------------------------------------------------------------
 @app.cell
 def _(mo):
-    mo.md(r"""## Delta gate-activity scatters (deck bottom)""")
+    mo.md(r"""## Delta gate-activity scatters (bottom row)""")
     return
 
 
@@ -338,17 +339,17 @@ def _(
     transforms,
 ):
     def _():
-        # Both scatters derive from one memoized frame (DS6.4 plot_df_1).
+        # Both scatters derive from one memoized frame.
         plot_df = transforms.gate_activity_delta_frame(MODEL, MODELS)
 
-        # bottom-left — single-model scatter, untitled (DS6.4:568-590).
+        # bottom-left — single-model scatter, untitled.
         single = plot_df[plot_df["model"] == EXEMPLAR]
         fig_single = render_gate_scatter(single, figsize=FIGSIZE_SCATTER)
         if save_svgs.value:
             paper_style.save_panel(fig_single, 7, "gate_scatter_delta_forget_input")
 
-        # bottom-right — aggregated unit-mean scatter (reconstructed backup
-        # DS6.4:1150-1195): one point per (colour_entered, model).
+        # bottom-right — aggregated unit-mean scatter: one point per
+        # (colour_entered, model).
         agg = plot_df.groupby(["color_entered", "model"], as_index=False)[
             ["i", "f", "g", "o"]
         ].mean()

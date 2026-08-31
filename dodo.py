@@ -1810,7 +1810,7 @@ def task_full_pipeline():
 
 
 # ============================================================================
-# PAPER FIGURE PANELS (figures/SPEC.md step 5)
+# PAPER FIGURE PANELS
 # ============================================================================
 
 FIGURES_SRC_DIR = PROJECT_ROOT / 'figures'
@@ -1819,7 +1819,7 @@ PAPER_STYLE_FILE = PROJECT_ROOT / 'src' / 'learning_in_context' / 'visualization
 FIG_TRANSFORMS_FILE = PROJECT_ROOT / 'src' / 'learning_in_context' / 'visualization' / 'transforms.py'
 
 # Representative, stable tier-1 artifacts each figure script reads (via
-# transforms.py). Pragmatic per SPEC step 5: a single stable file that
+# transforms.py). Deliberately a single stable file that
 # stands in for the underlying data directory, not a glob over every npz
 # (fig4/fig5 read data/cache/model_states/extended_dataset/*, fig6/fig7 read
 # data/cache/interventions/*) — consistent with how the rest of dodo.py
@@ -1907,7 +1907,7 @@ def _panel_deps_not_newer_than_targets(dep_paths, target_paths):
 
 
 def task_panels():
-    """Regenerate paper figure panels (figures/SPEC.md step 5).
+    """Regenerate the paper's figure panel SVGs.
 
     One sub-task per figure script (``panels:fig4`` … ``panels:fig7``). Each
     sub-task runs its marimo script headlessly with the current interpreter

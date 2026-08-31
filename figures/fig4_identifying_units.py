@@ -1,42 +1,40 @@
 """Figure 4 — identifying critical units (marimo, dual-use).
 
-Ports the ElasticNet critical-units panels from
-``hmdcpd-analysis/notebooks/DS2-Identifying-Critical-Units.py`` into the
-paper-figure pipeline defined by ``figures/SPEC.md``. Four panels (page-1 scope
-of the fig4 deck; deck ``Fig 4 - Identifying Crit units-1.png`` boxes B/C/E/F —
-A/D/G are hand-drawn Illustrator schematics, EXCLUDED per the fig4 contract):
+Ports the ElasticNet critical-units panels from the exploratory analysis
+notebooks in the sibling ``hmdcpd-analysis`` repo. Four panels — B/C/E/F of
+figure 4; A/D/G are hand-drawn schematics composed externally, so no script
+produces them:
 
     B  score_curves_hazard_rate.svg   — F1/Accuracy vs. ElasticNet Alpha (binary)
     C  coef_heatmap_hazard_rate.svg   — 32-unit coefficient heatmap
     E  score_curves_contingency.svg   — per-label F1/Accuracy (3-class decode)
     F  coef_heatmap_contingency.svg   — 32-unit coefficient heatmap
 
-Dual use (SPEC rule 7): ``marimo edit figures/fig4_identifying_units.py`` for
-interactive work; ``python figures/fig4_identifying_units.py`` runs every cell
-top-to-bottom (via ``app.run()``) and lands the 4 SVGs under
-``figures/panels/fig4/``.
+Dual use: ``marimo edit figures/fig4_identifying_units.py`` for interactive
+work; ``python figures/fig4_identifying_units.py`` runs every cell top-to-bottom
+(via ``app.run()``) and lands the 4 SVGs under ``figures/panels/fig4/``.
 
-Two deliberate, documented deviations from the DS2 source
----------------------------------------------------------
-1. **Dead-renderer fix (SPEC ruling 8).** DS2's ``plot_coefs_and_metrics``
-   (``:607``) references unbound ``_coefs``/``_hline_chance`` locals (a 2-line
-   typo) and would ``NameError`` at call time. The correct form is DS2.1's copy
-   (``:614-682``), which binds the parameters; the render helpers below port
-   that fixed form (split into two self-contained panels per SPEC rule 1).
-2. **Metrics correction.** DS2's contingency render cell (``:766``) reuses
+Two deliberate corrections to the ported source
+-----------------------------------------------
+1. **Dead-renderer fix.** The source's ``plot_coefs_and_metrics`` references
+   unbound ``_coefs``/``_hline_chance`` locals (a 2-line typo) and would
+   ``NameError`` at call time; a later copy of the same function in the sibling
+   notebooks binds the parameters correctly. The render helpers below port that
+   fixed form, split into two self-contained panels.
+2. **Metrics correction.** The source's contingency render cell reuses
    ``metrics_to_plot=['accuracy']`` left over from the hazard cell, which alone
-   would not draw the deck's per-label ``F1 - Label 0/1/2`` lines even though
-   the ``average=None`` f1 data exists. Both panels here pass F1 *and* Accuracy;
+   would not draw the per-label ``F1 - Label 0/1/2`` lines even though the
+   ``average=None`` f1 data exists. Both panels here pass F1 *and* Accuracy;
    the per-stat f1 averaging (binary scalar for hz, per-label vector for the
    3-class contingency decode) is what makes hz render a single ``F1`` line and
-   contingency render three — matching the deck.
+   contingency render three.
 
-Scope note: only the deck's exemplar model (``san-4604``) is fitted — the ~100
-ElasticNet fits behind these four panels — not DS2's full 10-model loop. Page 1
-shows a single model's panels; the multi-model aggregation (deck D/G) is
-hand-drawn and excluded. fig4's fits are SPEC rule 4's tolerated inline-compute
-exception, memoized via ``transforms.elasticnet_coefficient_paths`` (SPEC
-rule 8) so warm reruns are instant.
+Scope note: only the exemplar model (``san-4604``) is fitted — the ~100
+ElasticNet fits behind these four panels — not the source's full 10-model loop.
+These panels show a single model; the multi-model aggregation is a hand-drawn
+schematic. These fits are the pipeline's one tolerated piece of inline compute,
+memoized via ``transforms.elasticnet_coefficient_paths`` so warm reruns are
+instant.
 """
 
 import marimo
@@ -66,8 +64,9 @@ def _():
     from mpl_toolkits.axes_grid1.inset_locator import inset_axes
 
     # The elastic-net logistic sweep does not converge at every C; that is
-    # expected on this recipe (DS2 ran it the same way). Silence the flood so a
-    # headless run's stderr stays readable — it does not affect the fit paths.
+    # expected on this recipe (the source notebooks ran it the same way).
+    # Silence the flood so a headless run's stderr stays readable — it does not
+    # affect the fit paths.
     from sklearn.exceptions import ConvergenceWarning
 
     warnings.filterwarnings("ignore", category=ConvergenceWarning)
@@ -93,14 +92,15 @@ def _(paper_style):
     # (so svg.fonttype='none' is set before any panel is saved).
     paper_style.apply_style()
 
-    # Pinned to the deck's exemplar model (san-4604, lstm, extended_dataset) —
-    # the single model whose panels B/C/E/F appear on fig4 deck page 1.
+    # Pinned to the exemplar model (san-4604, lstm, extended_dataset) — the
+    # single model whose panels B/C/E/F appear in figure 4.
     DATASET = "extended_dataset"
     MODEL = "lstm"
     EXP_ID = "san-4604"
 
-    # Panel sizes from the paper_style vocabulary (SPEC rule 3; per-panel
-    # override per ruling 7). Score curves are wide-and-short; heatmaps taller.
+    # Panel sizes from the paper_style size vocabulary, overridden per panel:
+    # score curves are wide-and-short, heatmaps taller. Panels are exported at
+    # final physical size, so these inches are what the composed figure gets.
     FIGSIZE_SCORE = (paper_style.HALF_WIDTH, 1.7)
     FIGSIZE_HEATMAP = (paper_style.HALF_WIDTH, 2.6)
 
@@ -121,8 +121,9 @@ def _(mo):
 
 @app.cell
 def _(np, plt):
-    # Render helper — score curve (ported from DS2.1 plot_coefs_and_metrics's
-    # ax1 block, the fixed form; SPEC rule 1: self-contained single panel).
+    # Render helper — score curve (ported from the source's
+    # plot_coefs_and_metrics ax1 block, in its fixed form; one self-contained
+    # panel with its own axes, labels, and legend).
     def render_score_curve(
         metrics,
         C_logspace,
@@ -174,9 +175,10 @@ def _(np, plt):
 
 @app.cell
 def _(np, plt, TwoSlopeNorm, inset_axes):
-    # Render helper — coefficient heatmap (ported from DS2.1's ax3 block, fixed
-    # form; colorbar labelled "Coefficient Value" per the deck / LIC's
-    # critical_units_plots.py, not DS2.1's blank label).
+    # Render helper — coefficient heatmap (ported from the source's ax3 block,
+    # in its fixed form; colorbar labelled "Coefficient Value" to match the
+    # composed figure and this repo's critical_units_plots.py, rather than the
+    # source's blank label).
     def render_coef_heatmap(
         coefs,
         C_logspace,
@@ -224,7 +226,7 @@ def _(np, plt, TwoSlopeNorm, inset_axes):
 
 
 # ---------------------------------------------------------------------------
-# Transforms (memoized ElasticNet regularization paths — SPEC rules 4 + 8)
+# Transforms (memoized ElasticNet regularization paths)
 # ---------------------------------------------------------------------------
 @app.cell
 def _(DATASET, EXP_ID, MODEL, transforms):
@@ -252,7 +254,8 @@ def _(DATASET, EXP_ID, MODEL, transforms):
 
 @app.cell
 def _(np, fit_hz, fit_cont):
-    # Vline index = last non-chance alpha (DS2:682 hz offset -3, :744 cont -2).
+    # Vline index = last non-chance alpha (offset -3 for hz, -2 for cont, as
+    # in the source notebooks).
     def _last_non_chance(metrics, offset):
         acc = np.asarray(metrics["accuracy"])
         return int(np.argmin(np.round(acc, 3))) - offset
@@ -277,7 +280,7 @@ def _(FIGSIZE_SCORE, VLINE_HZ, fit_hz, paper_style, render_score_curve, save_svg
         fig = render_score_curve(
             metrics=fit_hz["metrics"],
             C_logspace=fit_hz["C_logspace"],
-            metrics_to_plot=["f1", "accuracy"],  # F1 first → deck legend order
+            metrics_to_plot=["f1", "accuracy"],  # F1 first → legend order
             hline_chance=0.5,
             vline_performance=(VLINE_HZ, "accuracy"),
             figsize=FIGSIZE_SCORE,

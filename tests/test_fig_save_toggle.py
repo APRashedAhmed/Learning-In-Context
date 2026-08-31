@@ -18,9 +18,9 @@ script must satisfy three properties:
    the cell's trailing ``return``, with a bare expression statement that
    actually displays something — the figure object itself, or an
    ``mo.vstack([...])`` of figures for cells that render several panels in a
-   loop. A call that merely re-invokes a private throwaway closure (the
-   ``def _(): ...; _()`` idiom used today, which discards its return value and
-   therefore displays nothing) does not satisfy this — nor does ending on the
+   loop. A call that merely re-invokes a private throwaway closure (the bare
+   ``def _(): ...; _()`` idiom, which discards its return value and therefore
+   displays nothing) does not satisfy this — nor does ending on the
    ``save_panel`` call itself, nor on an inert literal.
 4. The switch is wired up the way marimo's file format demands: the cell that
    assigns ``save_svgs`` also returns it, and every *other* cell that reads
@@ -28,10 +28,7 @@ script must satisfy three properties:
    raises ``NameError`` at cell-run time even though contracts 1-3 hold.
 
 These are pure ``ast`` checks over the script source: no marimo runtime, no
-figure rendering, no data access. They are written before the feature lands
-and are expected to fail against the current scripts, which have no
-``save_svgs`` switch, no gating, and end every save-bearing cell on a
-throwaway closure call rather than a display expression.
+figure rendering, no data access.
 """
 
 from __future__ import annotations
@@ -163,9 +160,9 @@ def _is_display_expression(stmt: ast.stmt) -> bool:
     `mo` such as `mo.vstack([...])` for cells rendering several panels.
 
     Rejected: the `save_panel(...)` call itself (returns a `Path`), the
-    throwaway `def _(): ...; _()` closure-invocation idiom used by the
-    pre-feature scripts (discards its return value), and inert literals such as
-    a bare string or `None`, none of which display a figure.
+    throwaway `def _(): ...; _()` closure-invocation idiom (discards its return
+    value), and inert literals such as a bare string or `None`, none of which
+    display a figure.
     """
     if not isinstance(stmt, ast.Expr):
         return False

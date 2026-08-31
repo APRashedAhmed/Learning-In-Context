@@ -2,41 +2,39 @@
 
 Retrofit of ``figures/fig_hazard_rate_activity.py`` (+ contingency computations
 ported from ``figures/fig_contingency_activity.py``) into the paper-figure
-pipeline defined by ``figures/SPEC.md``:
+pipeline:
 
-* the shared theme comes from ``paper_style.apply_style`` (SPEC rule 2: live-text
-  SVG), not an inline ``sns.set_theme`` block;
+* the shared theme comes from ``paper_style.apply_style`` (live-text SVG), not
+  an inline ``sns.set_theme`` block;
 * tier-2 transformations are memoized in
-  ``learning_in_context.visualization.transforms`` (SPEC rule 8) so styling
-  iteration never re-pays transformation cost;
+  ``learning_in_context.visualization.transforms`` so styling iteration never
+  re-pays transformation cost;
 * transform cells are split from render cells;
 * each panel is exported self-contained via ``save_panel`` — no panel letters,
-  no suptitles, no composed grids (SPEC rule 1).
+  no suptitles, no composed grids; the composition happens outside this repo.
 
-Twelve panels (page-1 scope of the fig5 deck; VERIFIER RULING in
-``tests/test_fig5_panels.py``) — three activity blocks × {hidden, cell} ×
-{timecourse, profile}:
+Twelve panels (contract in ``tests/test_fig5_panels.py``) — three activity
+blocks × {hidden, cell} × {timecourse, profile}:
 
-    Block 1  Hazard Rate, color change      (deck C/D/E/F)
-    Block 2  Contingency, color change      (deck C/D/E/F, lower pair)
-    Block 3  Contingency, no color change   (deck G/H/I/J)
+    Block 1  Hazard Rate, color change      (panels C/D/E/F of figure 5)
+    Block 2  Contingency, color change      (lower C/D/E/F row-pair)
+    Block 3  Contingency, no color change   (panels G/H/I/J)
 
-Dual use (SPEC rule 7): ``marimo edit figures/fig5_unit_activity.py`` for
-interactive work; ``python figures/fig5_unit_activity.py`` runs every cell
-top-to-bottom (via ``app.run()``) and lands the 12 SVGs under
-``figures/panels/fig5/``.
+Dual use: ``marimo edit figures/fig5_unit_activity.py`` for interactive work;
+``python figures/fig5_unit_activity.py`` runs every cell top-to-bottom (via
+``app.run()``) and lands the 12 SVGs under ``figures/panels/fig5/``.
 
-Note (deviation from literal source; deck-verified): the contingency-block
-profile scatters in ``fig_contingency_activity.py`` reference
+Note (deviation from the literal source): the contingency-block profile
+scatters in ``fig_contingency_activity.py`` reference
 ``dict_model_stat_units_all["hz"]``, which is *empty* in that file
 (commented-out copy-paste leftover) — the literal cells would ``KeyError``,
 and their step criterion (``(targets[..., -4:-2] == 1).any``) does not
-reproduce the deck either. The recipe below was recovered numerically from
-the deck page ("Fig 5 - Crit Unit Behavior-1.png"): the **"hz" exemplar
+reproduce the published panels either. The recipe below was recovered
+numerically from figure 5 as composed for the paper: the **"hz" exemplar
 units restricted to the 6 contingency models** (``STAT_UNITS["hz_cont"]``),
 step criterion ``targets[..., -2] == 1`` (bounce color change) for block 2
 and bounce-without-change for block 3 — all six models' (step, decay)
-points match the deck panels exactly (decay is criterion-independent, so
+points match the published panels exactly (decay is criterion-independent, so
 matching decays uniquely fingerprint the unit set). See
 ``transforms.activity_change_profile``.
 """
@@ -122,7 +120,8 @@ def _(mo):
 
 @app.cell
 def _(plt, sns):
-    # Render helpers (pure styling — SPEC rule 1: each panel self-contained).
+    # Render helpers (pure styling — each panel is self-contained: its own
+    # axes, labels, and legend).
     def render_timecourse(
         df,
         unit,
@@ -163,7 +162,7 @@ def _(plt, sns):
             ax.set_title(f"{cond} {stat_short} Trials")
             ax.set_xticks(range(0, T, 5))
             ax.set_ylabel(f"{unit_word} Unit Activity" if j == 0 else "")
-        # One legend per panel, placed outside to the right (rule 1).
+        # One legend per panel, placed outside to the right.
         last = axes[-1]
         if last.get_legend() is not None:
             sns.move_legend(
@@ -337,7 +336,7 @@ def _(DATASET, MODEL, transforms):
         dataset=DATASET,
         model_name=MODEL,
         criterion_mode="bounce_color_change",
-        unit_set="hz_cont",  # deck-verified: hz units of the 6 cont models
+        unit_set="hz_cont",  # hz units of the 6 cont models (see docstring)
     )
     return (df_cont_profile,)
 
@@ -357,8 +356,8 @@ def _(
     def _():
         change_labels = {
             "Low": [f"Color Change {i + 1}" for i in range(3)],
-            # Deck block-2 legend shows Color Change 1..6 (the literal source
-            # cell currently says 7; the deck is the content anchor).
+            # The published block-2 legend shows Color Change 1..6; the
+            # literal source cell says 7. The composed figure is the anchor.
             "High": [f"Color Change {i + 1}" for i in range(6)],
         }
         palette = viridis_palette("Color Change", 6)
@@ -443,7 +442,7 @@ def _(DATASET, MODEL, transforms):
         dataset=DATASET,
         model_name=MODEL,
         criterion_mode="bounce_no_change",
-        unit_set="hz_cont",  # deck-verified: hz units of the 6 cont models
+        unit_set="hz_cont",  # hz units of the 6 cont models (see docstring)
     )
     return (df_cont_nc_profile,)
 

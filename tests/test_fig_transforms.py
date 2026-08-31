@@ -1,72 +1,48 @@
-"""Contract tests for the NOT-YET-WRITTEN
-``src/learning_in_context/visualization/transforms.py`` (figures/SPEC.md rule 8,
-procedure step 2).
+"""Contract tests for ``src/learning_in_context/visualization/transforms.py``.
 
-This module does not exist yet, so the top-level import below is expected to
-raise ``ModuleNotFoundError`` and every test here should be RED until the
-module is implemented.
-
-Cache-dir seam (judgment call, encoded here as the contract):
+Cache-dir seam:
     ``transforms.get_memory(cache_dir: str | Path | None = None) -> joblib.Memory``
     is a factory. With ``cache_dir=None`` it reads the env var
     ``LIC_FIG_CACHE_DIR``; if that is unset too, it defaults to
-    ``<repo_root>/data/cache/fig_transforms`` (SPEC rule 8's stated location,
-    "cache lives beside tier-1 artifacts in data/cache/", per the 2026-08-28
-    operator ruling in SPEC). ``transforms.MEMORY`` is the shared instance
-    built by calling ``get_memory()`` at import time — this is what fig5's
-    (and later fig6/fig4's) memoized transforms are decorated with.
+    ``<repo_root>/data/cache/fig_transforms`` — the transform cache lives
+    beside the tier-1 artifacts under ``data/cache/``. ``transforms.MEMORY``
+    is the shared instance built by calling ``get_memory()`` at import time,
+    and every memoized figure transform is decorated with it.
 
     Tests use the explicit ``cache_dir=`` override to get an isolated
     ``Memory`` per test (never touching the real ``data/cache/fig_transforms``
-    dir); one test also exercises the env-var path via monkeypatch to prove
-    both seams work, since the SPEC left the choice open ("pick one and
-    encode it").
+    dir); one test also exercises the env-var path via monkeypatch, so both
+    seams are covered.
 
-FORCE_RECOMPUTE seam (judgment call): ``transforms.FORCE_RECOMPUTE`` is a
-bool computed from the env var ``LIC_FIG_FORCE_RECOMPUTE`` at import time,
-and ``transforms.clear_cache(memory=None)`` is the manual-recompute knob
-SPEC rule 8 requires ("manual recompute = memory.clear(), delete the cache
-dir, or a FORCE_RECOMPUTE env knob") — it clears the given Memory instance
-(defaulting to the shared ``transforms.MEMORY``). This test module checks
-``clear_cache`` behaviorally (recompute happens after clearing) and checks
-``FORCE_RECOMPUTE`` only for existence/type, since wiring it into "clear
-before every call" is an implementation detail left to the figure scripts.
+FORCE_RECOMPUTE seam: ``transforms.FORCE_RECOMPUTE`` is a bool computed from
+the env var ``LIC_FIG_FORCE_RECOMPUTE`` at import time, and
+``transforms.clear_cache(memory=None)`` is the manual-recompute knob — it
+clears the given Memory instance (defaulting to the shared
+``transforms.MEMORY``). This module checks ``clear_cache`` behaviorally
+(recompute happens after clearing) and checks ``FORCE_RECOMPUTE`` only for
+existence/type, since wiring it into "clear before every call" is left to the
+figure scripts.
 
-Shared transform naming (judgment call — THE CONTRACT the implementer must
-satisfy): SPEC rule 8 names fig5's shared transform singularly — "the
-per-model intervention frames [...] and fig5's ordered-change windows (feed
-both activity panels and profile scatters)". Reading
-``figures/fig_hazard_rate_activity.py`` (the retrofit source, cells around
-:334-:418 and :876-:999) shows this is actually two distinct computations,
-both windowed around a color change but otherwise independent — there is no
-code path where one literally feeds the other:
+Shared transform naming: fig5's shared work is two distinct computations, both
+windowed around a color change but otherwise independent — there is no code
+path where one feeds the other — so ``transforms.py`` exposes two functions
+rather than one:
 
-  * ``get_ordered_sliding_window`` (:334) builds the per-timestep, per-unit,
-    per-change-order dataframe consumed by the activity time-course panels
-    (``plot_ordered_change_activity_rows``, :674). This test module names the
-    memoized equivalent ``ordered_change_windows`` and treats it as THE
+  * ``ordered_change_windows`` — the per-timestep, per-unit, per-change-order
+    dataframe consumed by the activity time-course panels. Treated here as the
     representative shared transform (deep signature contract below).
-  * ``get_activity_difference_around_criterion`` /
-    ``get_activity_difference_during_zero_criterion`` (:876, :908) build the
-    step-size / activity-decay diffs consumed by the profile scatter panels
-    (``plot_decay_vs_step``, :1024). This test module names the memoized
-    equivalent ``activity_change_profile`` and only checks it exists, is
-    callable, and avoids raw-array parameters (lighter contract).
+  * ``activity_change_profile`` — the step-size / activity-decay diffs consumed
+    by the profile scatter panels. Lighter contract: exists, is callable, and
+    avoids raw-array parameters.
 
-A verifier should confirm this two-function split (vs. a single unified
-"ordered-change windows" function) matches operator intent — it is the
-most defensible reading of the source, but SPEC's wording suggests the
-author may have had one function in mind.
-
-Path/param-keying contract (SPEC rule 8: "Key on paths + params, never on
-loaded arrays"): the notebook's originals take pre-loaded numpy arrays
-(``states``, ``samples``, ``targets``, ``df_selected``) as arguments — that
-is exactly the anti-pattern rule 8 forbids for a memoized function (it would
-force joblib to hash large arrays on every call, and the cache key would be
-unstable/expensive). The memoized ``transforms.py`` versions must instead key
-on identifiers (dataset name, model name, exp id, ...) and load data
-internally. This is checked via ``inspect.signature`` heuristics rather than
-pinning an exact parameter list, so the implementer has latitude in naming.
+Path/param-keying contract: the source notebooks' originals take pre-loaded
+numpy arrays (``states``, ``samples``, ``targets``, ``df_selected``) as
+arguments, which is exactly the anti-pattern for a memoized function — it would
+force joblib to hash large arrays on every call, making the cache key unstable
+and expensive. The memoized ``transforms.py`` versions key on identifiers
+(dataset name, model name, exp id, ...) and load data internally. This is
+checked via ``inspect.signature`` heuristics rather than by pinning an exact
+parameter list, leaving latitude in naming.
 """
 
 from __future__ import annotations
@@ -78,18 +54,17 @@ from pathlib import Path
 import joblib
 import pytest
 
-# Import defensively: transforms.py does not exist yet. A bare top-level
-# import would raise a *collection* error that aborts pytest's entire run
-# (verified empirically: a single module's ImportError at collection time
-# stops ALL other test modules in the same invocation, not just this one) --
-# that would break test_paper_style.py's green run too. Guarding the import
-# and letting each test fail independently on ``transforms.<attr>`` (raising
-# AttributeError on the ``None`` sentinel) gives per-test RED failures for
-# the right reason instead of one blanket collection abort.
+# Import defensively. If transforms.py were unimportable, a bare top-level
+# import would raise a *collection* error that aborts pytest's entire run:
+# a single module's ImportError at collection time stops ALL other test
+# modules in the same invocation, not just this one. Guarding the import and
+# letting each test fail independently on ``transforms.<attr>`` (raising
+# AttributeError on the ``None`` sentinel) gives per-test failures for the
+# right reason instead of one blanket collection abort.
 try:
     from learning_in_context.visualization import transforms
     _IMPORT_ERROR: Exception | None = None
-except ImportError as exc:  # pragma: no cover - exercised until transforms.py exists
+except ImportError as exc:  # pragma: no cover - only when transforms.py is broken
     transforms = None  # type: ignore[assignment]
     _IMPORT_ERROR = exc
 
@@ -97,19 +72,19 @@ _REPO_ROOT = Path(__file__).resolve().parent.parent
 
 
 def test_transforms_module_is_importable():
-    """Standalone, clearly-named red flag for "transforms.py doesn't exist yet".
+    """Standalone, clearly-named check that transforms.py imports at all.
 
     Every other test below will also fail (via AttributeError on the ``None``
     sentinel) if this one does, but this test names the actual root cause.
     """
     if _IMPORT_ERROR is not None:
         pytest.fail(
-            "learning_in_context.visualization.transforms is not importable "
-            f"yet: {_IMPORT_ERROR!r}"
+            "learning_in_context.visualization.transforms is not importable: "
+            f"{_IMPORT_ERROR!r}"
         )
 
 # Parameter names that would indicate a memoized function is keying on
-# preloaded arrays rather than paths/params (SPEC rule 8).
+# preloaded arrays rather than paths/params.
 _FORBIDDEN_ARRAY_PARAM_NAMES = {
     "states",
     "samples",
@@ -213,7 +188,7 @@ class TestMemoizationInfrastructure:
 
 
 class TestOrderedChangeWindowsSignature:
-    """The representative shared transform (SPEC rule 8's callout).
+    """The representative shared transform.
 
     Feeds the fig5 activity time-course panels. Must key on paths/ids/params,
     never on preloaded arrays.
@@ -229,7 +204,7 @@ class TestOrderedChangeWindowsSignature:
         offending = param_names & _FORBIDDEN_ARRAY_PARAM_NAMES
         assert not offending, (
             f"ordered_change_windows takes raw-array-shaped params {offending}; "
-            "SPEC rule 8 requires keying on paths/ids/params, loading data "
+            "memoized transforms must key on paths/ids/params and load data "
             "internally."
         )
 
@@ -272,7 +247,7 @@ class TestOrderedChangeWindowsSignature:
         assert hasattr(fn, "func") and hasattr(fn, "store_backend"), (
             "ordered_change_windows does not look like a joblib-memoized function"
         )
-        # SPEC rule 8: decorated with the *shared* Memory instance, not a
+        # Must be decorated with the *shared* Memory instance, not a
         # private/local Memory. joblib roots a MemorizedFunc's store under
         # ``<memory.location>/joblib`` — so the function's backend location
         # must sit under transforms.MEMORY's location.

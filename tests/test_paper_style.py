@@ -1,10 +1,8 @@
-"""Contract tests for the (already implemented) paper figure style module.
+"""Contract tests for the paper figure style module.
 
-Covers ``src/learning_in_context/visualization/paper_style.py`` against
-``figures/SPEC.md`` rules 2 (live-text SVG export), 3 (final physical size /
-size vocabulary), and the module's own ``apply_style`` / ``save_panel``
-contract (SPEC procedure step 1). This module is already implemented, so
-these tests are expected to PASS.
+Covers ``src/learning_in_context/visualization/paper_style.py``: live-text SVG
+export, the final-physical-size vocabulary, and the module's own
+``apply_style`` / ``save_panel`` contract.
 
 All tests monkeypatch ``paper_style.PANELS_DIR`` to a ``tmp_path`` so the
 real ``outputs/`` tree is never touched.
@@ -40,7 +38,7 @@ def _reset_rcparams():
 
 
 class TestApplyStyle:
-    """SPEC rule 2: live-text SVG (svg.fonttype='none'); PDF Type 42 if ever added."""
+    """Live-text SVG (svg.fonttype='none'); PDF Type 42 if PDF is ever added."""
 
     def test_sets_svg_fonttype_none(self):
         paper_style.apply_style()
@@ -65,7 +63,7 @@ class TestApplyStyle:
 
 
 class TestSizeVocabulary:
-    """SPEC rule 3: final physical size comes from a named size vocabulary."""
+    """Final physical size comes from a named size vocabulary."""
 
     @pytest.mark.parametrize(
         "name",
@@ -140,7 +138,7 @@ class TestSavePanel:
 
         content = out_path.read_text()
         assert out_path.suffix == ".svg"
-        # Live (selectable/editable) text elements, not text-as-paths: SPEC rule 2.
+        # Live (selectable/editable) text elements, not text-as-paths.
         assert "<text" in content
         # The label string itself should appear verbatim as text content,
         # not merely be present as vector path data.

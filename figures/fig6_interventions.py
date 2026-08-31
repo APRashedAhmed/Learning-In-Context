@@ -1,41 +1,38 @@
 """Figure 6 — critical-unit intervention panels (marimo, dual-use).
 
-Ported from ``hmdcpd-analysis/notebooks/DS4-Interventions.py`` into the
-paper-figure pipeline defined by ``figures/SPEC.md``:
+Ported from the exploratory analysis notebooks in the sibling
+``hmdcpd-analysis`` repo into the paper-figure pipeline:
 
-* the shared theme comes from ``paper_style.apply_style`` (SPEC rule 2: live-text
-  SVG), not an inline ``sns.set_theme`` block;
+* the shared theme comes from ``paper_style.apply_style`` (live-text SVG), not
+  an inline ``sns.set_theme`` block;
 * the per-model intervention prediction frames are the memoized, shared tier-2
-  transform ``transforms.intervention_prediction_frame`` (SPEC rule 8's
-  "known-shared-from-day-one" — fig7's gate panels reuse it), so styling
-  iteration never re-pays the load/window cost;
+  transform ``transforms.intervention_prediction_frame`` (fig7's gate panels
+  reuse it), so styling iteration never re-pays the load/window cost;
 * transform cells are split from render cells;
-* each deck box is exported as one self-contained SVG via ``save_panel`` — no
-  panel letters, no suptitles, no composed grids (SPEC rule 1).
+* each panel of the composed figure is exported as one self-contained SVG via
+  ``save_panel`` — no panel letters, no suptitles, no composed grids.
 
-Eight panels (page-1 scope of the fig6 deck; contract in
-``tests/test_fig6_panels.py``): two blocks × {hidden, cell} × {timecourse,
-point plot}.
+Eight panels (contract in ``tests/test_fig6_panels.py``): two blocks ×
+{hidden, cell} × {timecourse, point plot}.
 
-    Hazard-rate block   (deck G/H, I/J)  — straight trials, x 0-25
-    Contingency block   (deck K/L, M/N)  — wall-bounce trials, x 0-7
+    Hazard-rate block   (panels G/H, I/J)  — straight trials, x 0-25
+    Contingency block   (panels K/L, M/N)  — wall-bounce trials, x 0-7
 
-Deviations from the literal DS4 source (deck-verified / ruled):
+Deviations from the literal source:
 
 * Condition shorthand is uppercase ``HZ`` / ``CT`` from
-  ``paper_style.SHORTENED_CONDITIONS`` (SPEC ruling 6), not DS4's mixed-case
+  ``paper_style.SHORTENED_CONDITIONS``, not the source's mixed-case
   ``Hz`` / ``Cont`` — the single change that yields the contract's
-  ``"Low to High HZ"`` / ``"High to Low CT"`` subplot titles.
+  ``"Low to High HZ"`` / ``"High to Low CT"`` subplot titles. Shorthand is
+  shared across the paper's panels, so it is defined once in ``paper_style``.
 * Panel N (``summary_pointplot_ct_cell``) title reads "All Models Cell Unit
-  Interventions" — SPEC ruling 9 corrects the deck's/DS4's published
-  copy-paste bug (they render "Hidden" over what is actually the cell-unit
-  contingency frame ``dict_model_pred_dfs_melted_bounce_cont_c``). This is the
-  one title that deliberately differs from the deck image.
+  Interventions", correcting a copy-paste bug in the source: it renders
+  "Hidden" over what is actually the cell-unit contingency frame. This is the
+  one title that deliberately differs from the published panel.
 
-Dual use (SPEC rule 7): ``marimo edit figures/fig6_interventions.py`` for
-interactive work; ``python figures/fig6_interventions.py`` runs every cell
-top-to-bottom (via ``app.run()``) and lands the 8 SVGs under
-``figures/panels/fig6/``.
+Dual use: ``marimo edit figures/fig6_interventions.py`` for interactive work;
+``python figures/fig6_interventions.py`` runs every cell top-to-bottom (via
+``app.run()``) and lands the 8 SVGs under ``figures/panels/fig6/``.
 """
 
 import marimo
@@ -92,20 +89,20 @@ def _(np, paper_style):
     # Shared colormap-palette helper (promoted to paper_style; one copy).
     get_color_palette = paper_style.get_color_palette
 
-    # Pipeline pinned per DS4-Interventions.py.
+    # Pipeline constants pinned to the source analysis notebook.
     MODEL = "lstm"
     EXP_ID = "san-4604"  # paper exemplar shown in the time-course panels (fig5)
     NUM_ALPHAS = 11
     ALPHAS = np.linspace(0, 1, NUM_ALPHAS)  # 0.0 … 1.0
 
-    # DS4 windowing knobs.
+    # Windowing knobs, inherited from the source.
     TIMESTEPS_PLOT = 26  # N for hazard-rate straight trials (x 0-25)
     N_CONT = TIMESTEPS_PLOT - 2  # N for contingency (x pre-offset)
     TIMESTEP_INTERVENTION = TIMESTEPS_PLOT - 24  # gray dashed vline at x=2
-    BOUNCE_IDX = 15  # contingency wall-bounce onset (DS4 bounce_idx_2)
+    BOUNCE_IDX = 15  # contingency wall-bounce onset
 
-    # Final-timestep index the summary point plots collapse onto (DS4 magic
-    # numbers): 24 for hazard-rate straight, 8 for the bounce-offset contingency.
+    # Final-timestep index the summary point plots collapse onto: 24 for
+    # hazard-rate straight trials, 8 for the bounce-offset contingency.
     FINAL_T_HZ = 24
     FINAL_T_CT = 8
 
@@ -116,7 +113,7 @@ def _(np, paper_style):
         "san-4606", "san-4615", "san-4616", "san-4617", "san-4618",
     ]
 
-    # Type-hue palette for the summary point plots (DS4 flare over L2L/L2H/H2L/H2H).
+    # Type-hue palette for the summary point plots (flare over L2L/L2H/H2L/H2H).
     TYPE_ORDER = ["L2L", "L2H", "H2L", "H2H"]
     TYPE_PALETTE = get_color_palette(
         TYPE_ORDER, (("flare", 4),), linspace_range=np.array((0.0, 1.1))
@@ -159,7 +156,8 @@ def _(mo):
 
 @app.cell
 def _(FuncFormatter, Line2D, math, np, paper_style, plt, sns, get_color_palette):
-    # Render helpers (pure styling — SPEC rule 1: each panel self-contained).
+    # Render helpers (pure styling — each panel is self-contained: its own
+    # axes, labels, and legend).
 
     def render_interventions_rows(
         frame,
@@ -176,20 +174,20 @@ def _(FuncFormatter, Line2D, math, np, paper_style, plt, sns, get_color_palette)
         ylabel="\nP(Color Change)",
         legend_width_inches=2.75,
     ):
-        """Two condition-order subplots sharing one legend column (deck G/I/K/M).
+        """Two condition-order subplots sharing one legend column (panels G/I/K/M).
 
-        Ported from DS4 ``plot_interventions_rows`` (``:522``), rendering a
-        single model. Only deviation from the source: ``stat_short`` comes from
-        ``paper_style.SHORTENED_CONDITIONS`` (uppercase HZ/CT, SPEC ruling 6),
-        not DS4's mixed-case ``'Hz'``/``'Cont'``. The apparent legend redundancy
-        (a ref-cond legend built then overwritten by the 'Target' legend) is the
-        source's behaviour and matches the deck: only Alpha / Target /
-        Intervention render.
+        Ported from the source's row renderer, rendering a single model. Only
+        deviation from the source: ``stat_short`` comes from
+        ``paper_style.SHORTENED_CONDITIONS`` (uppercase HZ/CT), not the source's
+        mixed-case ``'Hz'``/``'Cont'``. The apparent legend redundancy (a
+        ref-cond legend built then overwritten by the 'Target' legend) is the
+        source's behaviour and matches the published panel: only Alpha / Target
+        / Intervention render.
         """
         cond_order = list(cond_order)
         num_conds = len(cond_order)
         stat_short = paper_style.SHORTENED_CONDITIONS[stat]
-        # dict_exp_alpha_mult: Low -> centroid 1, High -> centroid 0 (DS4).
+        # Intervention target mapping: Low -> centroid 1, High -> centroid 0.
         centroid_of = {"Low": 1, "High": 0}
 
         width_ratios = [figsize[0]] + [legend_width_inches] + [figsize[0]] * (num_conds - 1)
@@ -259,7 +257,8 @@ def _(FuncFormatter, Line2D, math, np, paper_style, plt, sns, get_color_palette)
                 num_rows = math.ceil(len(handles) / 2)
                 # Ref-cond legend ("<ref> HZ") — built, then overwritten below
                 # by the 'Target' legend (only the latter is add_artist'd). This
-                # matches DS4 and the deck's Alpha/Target/Intervention column.
+                # matches the source and the published Alpha/Target/Intervention
+                # column.
                 offset = 0.05 + num_rows * 0.045 + 0.05
                 ref_line = Line2D([0], [0], color="red", linewidth=2.5)
                 ref_title = "Target"
@@ -295,10 +294,10 @@ def _(FuncFormatter, Line2D, math, np, paper_style, plt, sns, get_color_palette)
     def render_pointplot(frame, final_timestep, title, palette, figsize):
         """Summary point plot: P(Final Color Change) vs Alpha, hue=Type (H/J/L/N).
 
-        Ported from DS4's polished FINAL point-plot cells (``:1176-1216`` etc.).
-        Keeps seaborn's native ``hue='Type'`` legend (title 'Type') — DS4's N
-        cell's stray ``plt.legend(loc='center left')`` that drops that title is
-        NOT ported.
+        Ported from the source's final point-plot cells. Keeps seaborn's native
+        ``hue='Type'`` legend (title 'Type') — the source's stray
+        ``plt.legend(loc='center left')`` in the panel-N cell, which drops that
+        title, is NOT ported.
         """
         sub = frame[frame["Timestep"] == final_timestep]
         fig = plt.figure(figsize=figsize)
@@ -325,7 +324,7 @@ def _(FuncFormatter, Line2D, math, np, paper_style, plt, sns, get_color_palette)
         return fig
 
     def add_type(frame, cond_col):
-        # Type = <cond>2<centroid>, e.g. 'L2H' (DS4). cond_col is 'Hazard Rate'
+        # Type = <cond>2<centroid>, e.g. 'L2H'. cond_col is 'Hazard Rate'
         # or 'Contingency'; Centroid 0 -> 'L', else 'H'.
         frame = frame.copy()
         frame["Type"] = (
@@ -339,7 +338,7 @@ def _(FuncFormatter, Line2D, math, np, paper_style, plt, sns, get_color_palette)
 
 
 # ---------------------------------------------------------------------------
-# Hazard-rate block — straight trials (deck G/H, I/J)
+# Hazard-rate block — straight trials (panels G/H, I/J)
 # ---------------------------------------------------------------------------
 @app.cell
 def _(mo):
@@ -435,7 +434,7 @@ def _(
 
 
 # ---------------------------------------------------------------------------
-# Contingency block — wall-bounce trials (deck K/L, M/N)
+# Contingency block — wall-bounce trials (panels K/L, M/N)
 # ---------------------------------------------------------------------------
 @app.cell
 def _(mo):
@@ -509,14 +508,14 @@ def _(
     add_type,
 ):
     def _():
-        # Ruling 9: panel N's title says "Cell" (correcting the deck's published
+        # Panel N's title says "Cell", correcting the source's published
         # "Hidden" copy-paste bug over what is genuinely the cell-unit
-        # contingency frame). The word is taken straight from the unit here, so
+        # contingency frame. The word is taken straight from the unit here, so
         # both L (hidden) and N (cell) render the correct unit.
         figs = []
         for unit, word, name in (
             ("hidden", "Hidden", "summary_pointplot_ct_hidden"),  # L
-            ("cell", "Cell", "summary_pointplot_ct_cell"),        # N (ruling 9)
+            ("cell", "Cell", "summary_pointplot_ct_cell"),        # N (title corrected)
         ):
             frames = []
             for exp_id in MODELS:
