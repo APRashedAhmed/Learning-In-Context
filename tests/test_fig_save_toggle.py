@@ -1,7 +1,7 @@
 """Static contract tests for the figure scripts' save/display toggle.
 
-Each of the four paper-figure marimo notebooks under ``figures/`` — fig4, fig5,
-fig6, fig7 — is expected to expose a ``save_svgs`` marimo UI switch and to use
+Each of the six paper-figure marimo notebooks under ``figures/`` — fig2, fig3,
+fig4, fig5, fig6, fig7 — is expected to expose a ``save_svgs`` marimo UI switch and to use
 it to gate every SVG export, while still displaying the rendered figure(s)
 inline so `marimo edit` remains useful as a review surface. Concretely, each
 script must satisfy three properties:
@@ -42,6 +42,8 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 FIGURES_DIR = REPO_ROOT / "figures"
 
 FIGURE_SCRIPTS = [
+    FIGURES_DIR / "fig2_ideal_observer.py",
+    FIGURES_DIR / "fig3_task_results.py",
     FIGURES_DIR / "fig4_identifying_units.py",
     FIGURES_DIR / "fig5_unit_activity.py",
     FIGURES_DIR / "fig6_interventions.py",

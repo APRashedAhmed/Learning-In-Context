@@ -1827,8 +1827,36 @@ FIG_TRANSFORMS_FILE = PROJECT_ROOT / 'src' / 'learning_in_context' / 'visualizat
 EXTENDED_DATASET_MARKER = CACHE_DIR / 'model_states' / 'extended_dataset' / 'trial_meta.csv'
 INTERVENTIONS_MARKER = CACHE_DIR / 'interventions' / 'trial_meta.csv'
 
+# fig2 reads two datasets: the control dataset supplies the exemplar trials the
+# belief curves are drawn on (trial table plus the stimulus array the occlusion
+# geometry is read from), and the participant dataset supplies the ideal
+# observer's per-frame colour predictions the CWC panels score.
+CONTROL_DATASET_MARKER = CACHE_DIR / 'model_states' / 'control_dataset' / 'trial_meta.csv'
+CONTROL_SAMPLES_MARKER = CACHE_DIR / 'model_states' / 'control_dataset' / 'samples.npy'
+PARTICIPANT_DATASET_MARKER = (
+    CACHE_DIR / 'model_states' / 'participant_dataset' / 'trial_meta.csv'
+)
+PARTICIPANT_IBO_MARKER = (
+    CACHE_DIR / 'model_states' / 'participant_dataset' / 'ibo' / 'ibo-01.npz'
+)
+
 # name -> (targets relative to figures/panels/fig<N>/, tier-1 artifact deps)
 PANEL_TASKS = {
+    'fig2': {
+        'script': FIGURES_SRC_DIR / 'fig2_ideal_observer.py',
+        'targets': [
+            'estimate_curve_hazard_rate.svg',
+            'estimate_curve_contingency.svg',
+            'cwc_hazard_rate.svg',
+            'cwc_contingency.svg',
+        ],
+        'artifact_deps': [
+            CONTROL_DATASET_MARKER,
+            CONTROL_SAMPLES_MARKER,
+            PARTICIPANT_DATASET_MARKER,
+            PARTICIPANT_IBO_MARKER,
+        ],
+    },
     'fig4': {
         'script': FIGURES_SRC_DIR / 'fig4_identifying_units.py',
         'targets': [
@@ -1909,7 +1937,7 @@ def _panel_deps_not_newer_than_targets(dep_paths, target_paths):
 def task_panels():
     """Regenerate the paper's figure panel SVGs.
 
-    One sub-task per figure script (``panels:fig4`` … ``panels:fig7``). Each
+    One sub-task per figure script (``panels:fig2`` … ``panels:fig7``). Each
     sub-task runs its marimo script headlessly with the current interpreter
     and depends on the script itself, the shared style/transform modules, and
     a representative tier-1 artifact so `doit` reruns it when the upstream

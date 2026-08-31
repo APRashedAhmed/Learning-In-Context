@@ -16,9 +16,15 @@ from .conftest import run_doit
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
-EXPECTED_SUBTASKS = ["fig4", "fig5", "fig6", "fig7"]
+EXPECTED_SUBTASKS = ["fig2", "fig4", "fig5", "fig6", "fig7"]
 
 EXPECTED_TARGETS = {
+    "fig2": [
+        "estimate_curve_hazard_rate.svg",
+        "estimate_curve_contingency.svg",
+        "cwc_hazard_rate.svg",
+        "cwc_contingency.svg",
+    ],
     "fig4": [
         "score_curves_hazard_rate.svg",
         "coef_heatmap_hazard_rate.svg",
@@ -73,11 +79,28 @@ class TestPanelsTaskGraph:
                 f"doit list --all is missing sub-task panels:{fig_name}:\n{listed}"
             )
 
+    @staticmethod
+    def _info(fig_name: str) -> str:
+        """The ``doit info`` report for one sub-task.
+
+        ``doit info`` exits non-zero whenever the task it describes is merely
+        out of date, which every panel sub-task is until its script has been
+        run — so the exit code says nothing about whether the task graph is
+        well-formed, and asserting on it would make these graph-shape checks
+        pass or fail on whether someone happened to run ``doit panels`` first.
+        The emitted report is what carries the answer, and doit emits it in
+        either state.
+        """
+        result = run_doit("info", f"panels:{fig_name}")
+        assert f"panels:{fig_name}" in result.stdout, (
+            f"doit info panels:{fig_name} reported no such task\n"
+            f"--- stdout ---\n{result.stdout}\n--- stderr ---\n{result.stderr}"
+        )
+        return result.stdout
+
     @pytest.mark.parametrize("fig_name", EXPECTED_SUBTASKS)
     def test_subtask_targets_match_expected_svgs(self, fig_name):
-        result = run_doit("info", f"panels:{fig_name}")
-        assert result.returncode == 0, result.stderr
-        info = result.stdout
+        info = self._info(fig_name)
 
         out_dir = REPO_ROOT / "figures" / "panels" / fig_name
         for panel_name in EXPECTED_TARGETS[fig_name]:
@@ -88,9 +111,7 @@ class TestPanelsTaskGraph:
 
     @pytest.mark.parametrize("fig_name", EXPECTED_SUBTASKS)
     def test_subtask_depends_on_shared_style_and_transforms(self, fig_name):
-        result = run_doit("info", f"panels:{fig_name}")
-        assert result.returncode == 0, result.stderr
-        info = result.stdout
+        info = self._info(fig_name)
 
         assert "visualization/paper_style.py" in info
         assert "visualization/transforms.py" in info
