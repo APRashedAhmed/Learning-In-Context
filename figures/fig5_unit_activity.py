@@ -68,7 +68,7 @@ def _():
     from learning_in_context.visualization import paper_style
     from learning_in_context.visualization import transforms
 
-    return np, pd, plt, sns, paper_style, transforms
+    return np, paper_style, plt, sns, transforms
 
 
 @app.cell
@@ -95,17 +95,15 @@ def _(np, paper_style):
 
     FIGSIZE_TC = paper_style.PANEL_TUNING  # time-courses
     FIGSIZE_PROFILE = paper_style.PANEL_SQUARE  # scatters
-
     return (
-        DATASET,
-        MODEL,
-        EXP_ID,
-        T,
         CHANGE_IDX,
-        M,
-        COND_ORDER,
-        FIGSIZE_TC,
+        DATASET,
+        EXP_ID,
         FIGSIZE_PROFILE,
+        FIGSIZE_TC,
+        M,
+        MODEL,
+        T,
         viridis_palette,
     )
 
@@ -187,15 +185,14 @@ def _(plt, sns):
         fig.tight_layout()
         return fig
 
-    return render_timecourse, render_profile
+    return render_profile, render_timecourse
 
 
-# ---------------------------------------------------------------------------
-# Block 1 — Hazard Rate, color change
-# ---------------------------------------------------------------------------
 @app.cell
 def _(mo):
-    mo.md(r"""## Block 1 — Hazard Rate (color change)""")
+    mo.md(r"""
+    ## Block 1 — Hazard Rate (color change)
+    """)
     return
 
 
@@ -283,12 +280,11 @@ def _(FIGSIZE_PROFILE, df_hz_profile, paper_style, render_profile):
     return
 
 
-# ---------------------------------------------------------------------------
-# Block 2 — Contingency, color change
-# ---------------------------------------------------------------------------
 @app.cell
 def _(mo):
-    mo.md(r"""## Block 2 — Contingency (color change)""")
+    mo.md(r"""
+    ## Block 2 — Contingency (color change)
+    """)
     return
 
 
@@ -378,12 +374,11 @@ def _(FIGSIZE_PROFILE, df_cont_profile, paper_style, render_profile):
     return
 
 
-# ---------------------------------------------------------------------------
-# Block 3 — Contingency, no color change
-# ---------------------------------------------------------------------------
 @app.cell
 def _(mo):
-    mo.md(r"""## Block 3 — Contingency (no color change)""")
+    mo.md(r"""
+    ## Block 3 — Contingency (no color change)
+    """)
     return
 
 
