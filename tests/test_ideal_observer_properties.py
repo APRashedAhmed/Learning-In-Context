@@ -1,9 +1,13 @@
 """Tier 1+2 property (specification) suite for the ideal-observer models.
 
 Cells #1-#10 follow the sibling test-suite spec (C1-C12, status matrix); the two
-`v2_*` cells are new E2 cells added by the model-fixes work-unit. Bug-cells are
-`xfail(strict, raises=AssertionError)` — the living bug-ledger: fixing a bug
-flips its cell to a loud XPASS, signalling the marker's removal.
+`v2_*` cells are new E2 cells added by the model-fixes work-unit. Two further
+cells close mutation-audit gaps rather than spec cells:
+`test_v2_backward_colour_transition_is_uncounted` (W3, cyclic direction on the
+counting side) and `test_ico_grayzone_attribution_is_per_run` (W5, the per-run
+`seen` reset). Bug-cells are `xfail(strict, raises=AssertionError)` — the living
+bug-ledger: fixing a bug flips its cell to a loud XPASS, signalling the marker's
+removal.
 
 NB the current IdealCountingObserver crashes (`ValueError: max() arg is an empty
 sequence`) on any batch with ZERO grayzone frames (Tier-3, deferred), so every
@@ -54,10 +58,22 @@ def _gray(**kwargs):
 
 # --- Module-level Event scripts for the Tier-1 cells --------------------------
 
-# #3 batch invariance: the Task-4 audit's verified-non-vacuous SHORT/LONG shape.
-# SHORT carries a velocity change INSIDE its grayzone (index >= 2) and a colour
-# change ACROSS it; LONG's grayzone run is strictly longer, so it drives the old
-# batch-global max_grayzone_diff and perturbs SHORT's estimates while broken.
+# #3 batch invariance: the Task-4 audit's SHORT/LONG shape. SHORT carries a
+# velocity change INSIDE its grayzone (index >= 2) and a colour change ACROSS
+# it; LONG's grayzone run is strictly longer.
+#
+# STALE NON-VACUITY CLAIM, corrected 2026-08-31 (mutation audit, W6/W7). This
+# comment used to read "LONG ... drives the old batch-global max_grayzone_diff
+# and perturbs SHORT's estimates while broken". That mechanism was deleted in
+# 73ba679 (per-run backward-only attribution) and the index spaces moved again
+# in 8122992 (ICO-A). Re-measured at HEAD by restoring the batch-global
+# symmetric band as a mutant: row 0 comes out BIT-IDENTICAL solo vs batch,
+# because the band is centred on the change index and never reaches the exit
+# cell at either window width. A non-causal whole-run mutant is inert here too
+# (the velocity change sits at the run START, so backward-only already covers
+# every cell). This cell is therefore currently VACUOUS against both the E3 and
+# E4 regression classes; the prefix/nvc assertions it now makes are a
+# generalization with no live mutant behind them on this fixture.
 _GRAYZONE_BOUNCE_SCRIPT = [
     Event(color=0),
     Event(color=0),
@@ -92,6 +108,28 @@ _V2_VISIBLE_RANDOM_SCRIPT = [
 ]
 _K_CHANGES, _N_STEPS = 2, 6
 
+# W3 cyclic DIRECTION on the counting side. V2's E1 detector is DIRECTIONAL --
+# `(argmax_t - argmax_{t-1}) % 3 == 1` counts only a FORWARD cyclic step -- but no
+# other script in this file contains a backward (c -> c-1, equivalently a skip
+# c -> c+2) transition, so a mutant counting ANY colour change (`% 3 != 0`)
+# passed the whole suite. Fully visible, no walls and no declared velocity
+# change, so no bounce exists anywhere and only the hz channel can move.
+# Hand count over colours [0, 0, 1, 0, 0]:
+#   t=1  0 -> 0  unchanged -> beta_hz  1 -> 2
+#   t=2  0 -> 1  forward   -> alpha_hz 1 -> 2
+#   t=3  1 -> 0  BACKWARD  -> `changed` is False ((0 - 1) % 3 == 2) and
+#                             `unchanged` is False (the colour did move), so
+#                             NOTHING is counted on this frame
+#   t=4  0 -> 0  unchanged -> beta_hz  2 -> 3
+# => betas [alpha_hz, beta_hz, alpha_cont, beta_cont] = [2, 3, 1, 1].
+_V2_BACKWARD_TRANSITION_SCRIPT = [
+    Event(color=0),
+    Event(color=0),
+    Event(color=1),
+    Event(color=0),
+    Event(color=0),
+]
+
 # #8-V2 dissociation: the ONLY colour change coincides with the only bounce.
 # Geometry after the B1 builder fix: x = [248, 252, 244, 236, 228] (frame 0 is
 # now itself rendered OOB, which the pre-fix builder silently dropped), so
@@ -109,10 +147,23 @@ _BOUNCE_ONLY_VISIBLE_SCRIPT = [
 
 # #9 causality: an early grayzone run (len 4, velocity change at run start) whose
 # exit cell sits 3 cells from the change, followed by a strictly longer FUTURE
-# run (len 6). Full-script window = 1 + 6//2 = 4 reaches the exit cell; the
-# truncated script's window = 1 + 4//2 = 3 does not — so the attribution (and the
-# estimate) at _T_CUT depends on the future run. Verified non-vacuous pre-fix:
-# m_ovc[0, _T_CUT] full 0.3333 vs truncated 0.5.
+# run (len 6).
+#
+# STALE NON-VACUITY CLAIM, corrected 2026-08-31 (mutation audit, W6/W7). This
+# comment used to read "Full-script window = 1 + 6//2 = 4 reaches the exit cell;
+# the truncated script's window = 1 + 4//2 = 3 does not ... Verified non-vacuous
+# pre-fix: m_ovc[0, _T_CUT] full 0.3333 vs truncated 0.5". The windowed
+# attribution it describes was deleted in 73ba679 and the index spaces moved in
+# 8122992 (ICO-A). Re-measured at HEAD against a restored batch-global band
+# mutant AND a non-causal whole-run mutant: full and truncated agree on the
+# whole prefix, in BOTH colour channels, under both. So test_ico_causality is
+# currently VACUOUS against the E3/E4 regression classes on this script, and its
+# prefix/nvc assertions are a generalization with no live mutant behind them.
+#
+# The two runs are still load-bearing, just for a different property: they are
+# what test_ico_grayzone_attribution_is_per_run (W5) uses to pin the per-run
+# `seen` reset, which IS non-vacuous (mut: delete the reset -> whole suite green
+# before that cell existed).
 _CAUSAL_SCRIPT = [
     Event(color=0),
     Event(color=0),
@@ -436,6 +487,30 @@ class TestTier2Invariants:
             forward = torch.tensor([[0, 1, 0], [0, 0, 1], [1, 0, 0]], dtype=T.dtype)
             assert torch.allclose(T, (1 - p) * torch.eye(3) + p * forward, atol=1e-6)
 
+    def test_v2_backward_colour_transition_is_uncounted(self):
+        # W3. Cyclic DIRECTION on the COUNTING side -- the counterpart of the
+        # transition-matrix cell above, which pins it on the belief side. A
+        # backward step is not a forward step, so it is not a `changed` success;
+        # the colour demonstrably moved, so it is not an `unchanged` failure
+        # either. The rate accounting must therefore leave every beta exactly
+        # where it stood: betas move only for forward steps and for repeats.
+        # Without this cell the direction test had ZERO coverage -- a detector
+        # counting ANY colour change (`% 3 != 0`) passed the whole suite,
+        # because no other script here contains a non-forward transition.
+        #
+        # SCOPE (operator ruling): backward transitions are OUT OF DISTRIBUTION
+        # and not on the roadmap. This cell pins the COUNTING behaviour ONLY.
+        # CHARACTERIZATION, deliberately not asserted: on the backward frame the
+        # emission one-hot has no overlap with the predicted support, so
+        # `row_sum` is 0 and V2's zero-support branch RETAINS the previous
+        # belief ([0, 1, 0] here rather than the observed [1, 0, 0]). That
+        # branch is newly reachable post-W8 and is ACCEPTED as-is; it is not
+        # asserted, so nothing here enshrines it as intended semantics.
+        out = IdealCountingObserverV2()(
+            build_samples([_V2_BACKWARD_TRANSITION_SCRIPT]), return_means=True
+        )
+        assert torch.allclose(out["betas"][0], torch.tensor([2.0, 3.0, 1.0, 1.0]), atol=1e-5)
+
     def test_determinism(self):
         samples = self._samples()
         # _construct, not a bare ctor(): IdealBayesianObserver() would TypeError.
@@ -584,7 +659,13 @@ class TestBugLedger:
         ico = IdealCountingObserver(prog_bar=False)
         _, m_nvc_solo, m_ovc_solo, _ = ico(solo, return_means=True)
         _, m_nvc_batch, m_ovc_batch, _ = ico(mate, return_means=True)
-        assert torch.allclose(m_ovc_solo[0, n - 1], m_ovc_batch[0, n - 1], atol=1e-6)
+        # W6/W7: compare the WHOLE valid prefix, on BOTH colour-rate channels.
+        # This cell used to unpack m_nvc and never assert on it, and to compare
+        # m_ovc at the single index n - 1 -- so a batch-mate that perturbed the
+        # random channel, or the contingent channel anywhere but the last frame,
+        # went unseen.
+        assert torch.allclose(m_ovc_solo[0, :n], m_ovc_batch[0, :n], atol=1e-6)
+        assert torch.allclose(m_nvc_solo[0, :n], m_nvc_batch[0, :n], atol=1e-6)
 
     def test_v2_rate_recovery(self):
         # #7-V2 (C8). On a fully-visible script with K hand-counted random colour
@@ -600,8 +681,27 @@ class TestBugLedger:
 
     def test_v2_dissociation(self):
         # #8-V2 (C9). Bounce-only colour changes must raise cont and leave hz at prior.
+        #
+        # W2: the "hz stays at prior" half of that sentence was UNASSERTED --
+        # `cont > 0.5` alone is blind to a mutant that credits the
+        # bounce-coincident colour change to alpha_hz as well. Pin the whole
+        # beta vector, then keep the cont inequality for readability.
+        #
+        # Hand derivation on x = [248, 252, 244, 236, 228], whose ONLY bounce is
+        # at frame 1 (see _BOUNCE_ONLY_VISIBLE_SCRIPT):
+        #   t=1  visible R -> G, BOUNCE      -> alpha_cont 1 -> 2
+        #   t=2  visible G -> G, no bounce   -> beta_hz    1 -> 2
+        #   t=3  visible G -> G, no bounce   -> beta_hz    2 -> 3
+        #   t=4  visible G -> G, no bounce   -> beta_hz    3 -> 4
+        # => betas [alpha_hz, beta_hz, alpha_cont, beta_cont] = [1, 4, 2, 1].
+        # alpha_hz never moves: the single colour change is contingent on the
+        # bounce and must be credited to the contingent channel alone. beta_hz
+        # does move (the three no-bounce repeats are genuine hazard failures),
+        # which is why "hz stays at prior" has to be read off the vector rather
+        # than off the hz posterior mean.
         samples = build_samples([_BOUNCE_ONLY_VISIBLE_SCRIPT])
         out = IdealCountingObserverV2()(samples, return_means=True)
+        assert torch.allclose(out["betas"][0], torch.tensor([1.0, 4.0, 2.0, 1.0]), atol=1e-5)
         a_cont, b_cont = out["betas"][0, 2], out["betas"][0, 3]
         assert (a_cont / (a_cont + b_cont)) > 0.5 + 1e-3  # moved off the 0.5 prior
 
@@ -611,9 +711,49 @@ class TestBugLedger:
         full = build_samples([_CAUSAL_SCRIPT])
         trunc = build_samples([_CAUSAL_SCRIPT[: _T_CUT + 1]])
         ico = IdealCountingObserver(prog_bar=False)
-        _, _, m_ovc_full, _ = ico(full, return_means=True)
-        _, _, m_ovc_trunc, _ = ico(trunc, return_means=True)
-        assert torch.allclose(m_ovc_full[0, _T_CUT], m_ovc_trunc[0, _T_CUT], atol=1e-6)
+        _, m_nvc_full, m_ovc_full, _ = ico(full, return_means=True)
+        _, m_nvc_trunc, m_ovc_trunc, _ = ico(trunc, return_means=True)
+        # W6/W7: compare the WHOLE prefix up to the cut, on BOTH colour-rate
+        # channels. This cell used to discard m_nvc entirely and to compare
+        # m_ovc at the single index _T_CUT, so future-dependence at any earlier
+        # timestep, or in the random channel, went unseen.
+        assert torch.allclose(m_ovc_full[0, : _T_CUT + 1], m_ovc_trunc[0, : _T_CUT + 1], atol=1e-6)
+        assert torch.allclose(m_nvc_full[0, : _T_CUT + 1], m_nvc_trunc[0, : _T_CUT + 1], atol=1e-6)
+
+    def test_ico_grayzone_attribution_is_per_run(self):
+        # W5 (coverage cell, not a bug-ledger xfail). `find_overlapping_grayzone`
+        # RESETS its `seen` flag at the start of every grayzone run, so a
+        # velocity change inside one run can never explain a colour change
+        # revealed at a LATER run's exit. Deleting that reset used to pass the
+        # whole suite; the truncation cell above cannot reach it, because the
+        # deletion only bites past _T_CUT (the second run's exit), where a
+        # full-vs-truncated comparison has nothing to compare against.
+        #
+        # _CAUSAL_SCRIPT is already the two-run fixture this needs, so it is
+        # reused SOLO here:
+        #   run A -- frames 2-5, carries the script's ONLY velocity change
+        #            (declared at index 2, detected at frame 2), exits at frame 6
+        #   run B -- frames 8-13, carries NO velocity change, exits at frame 14
+        #            where the forward-filled colour goes G -> B
+        # Run B's exit change is therefore UNEXPLAINED and must land in the
+        # random (pccnvc) channel. Without the reset, run A's velocity change
+        # leaks across the visible stretch at frames 6-7 and is credited with
+        # run B's exit change instead: color_change_bounce[-1] flips to 1,
+        # velocity_change_random_shifted[-1] is replanted True, and the rates go
+        # m_ovc[-1] 2/3 -> 3/4, m_nvc[-1] 1/9 -> 1/16.
+        ico = IdealCountingObserver(prog_bar=False)
+        _, m_nvc, m_ovc, _ = ico(build_samples([_CAUSAL_SCRIPT]), return_means=True)
+        # attribution masks: the unexplained exit change is RANDOM, not contingent
+        assert ico.color_change_random[0, -1].item() == 1.0
+        assert ico.color_change_bounce[0, -1].item() == 0.0
+        # ...and run A's change is not replanted on run B's exit cell
+        assert not bool(ico.velocity_change_random_shifted[0, -1])
+        assert not bool(ico.velocity_change_bounce_shifted[0, -1])
+        # the rates that follow from those counts: counts_pccovc[-1] = (0, 1)
+        # -> (1 + 1) / (1 + 1 + 0 + 1) = 2/3; counts_pccnvc[-1] = (15, 1)
+        # -> (1 + 1) / (1 + 1 + 15 + 1) = 1/9.
+        assert torch.isclose(m_ovc[0, -1], torch.tensor(2.0 / 3.0), atol=1e-4)
+        assert torch.isclose(m_nvc[0, -1], torch.tensor(1.0 / 9.0), atol=1e-4)
 
     def test_ico_v2_agreement(self):
         # #10 (C11). On a controlled input the two counting observers agree.
