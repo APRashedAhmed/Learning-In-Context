@@ -62,8 +62,14 @@ from pathlib import Path
 import joblib
 import numpy as np
 import pandas as pd
+import torch
 from numpy.lib.stride_tricks import as_strided, sliding_window_view
 from scipy import stats
+
+from learning_in_context.models.ideal_observer import (
+    IdealBayesianObserver,
+    IdealCountingObserverV2,
+)
 
 # Repo root: this file lives at src/learning_in_context/visualization/.
 _REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -1234,3 +1240,298 @@ def model_cwc_by_contingency(
         .rename(columns={"sample_id": "model_sample"})
     )
     return grouped[["model", "model_sample", "Contingency", "cwc"]]
+
+
+# --------------------------------------------------------------------------- #
+# Ideal-observer belief curves (one exemplar trial, one parameter swept)
+# --------------------------------------------------------------------------- #
+# The belief curve is the ideal Bayesian observer's per-frame probability that
+# the ball's colour now differs from the colour it last showed while visible.
+# One exemplar trial supplies the geometry -- occlusion onset, wall bounces,
+# trial length -- and a single task parameter is swept across the curves, so the
+# curves differ only in the parameter and never in the trial they describe.
+#
+# Belief propagation is delegated to the imported observer: this section selects
+# the trial, threads the swept parameter into the observer's forward pass, and
+# reads the resulting posterior. It never re-derives the observer's transition
+# math, and the wall-bounce marker comes from the observer's own bounce
+# criterion so the marker cannot drift away from the step it explains.
+
+# Occluded frames carry the grayzone colour in all three channels; padded
+# frames past a trial's length carry -1.
+_GRAYZONE_LEVEL = 127.0
+
+_SWEEP_PARAMETERS = {"hazard": "pccnvc", "contingency": "pccovc"}
+
+# Only straight-path trials carry a grayzone position, so only they get the
+# per-position endpoint markers.
+_GRAYZONE_POSITION_TRIAL_TYPE = "Straight"
+
+
+def _final_grayzone_entry(colors: np.ndarray) -> int:
+    """Index of the first frame of a trial's final unbroken occluded run.
+
+    Args:
+        colors: ``(length, 3)`` colour channels, truncated to the trial length.
+
+    Returns:
+        The first occluded frame of the closing run, or ``length`` when the
+        trial ends on a visible frame.
+    """
+    gray = (colors == _GRAYZONE_LEVEL).all(axis=-1)
+    visible = np.flatnonzero(~gray)
+    return int(visible[-1]) + 1 if visible.size else 0
+
+
+def _exemplar_video_id(
+    df_meta: pd.DataFrame,
+    trial_type: str,
+    idx_time: int | None,
+    exemplar_rank: int,
+) -> int:
+    """Pick one trial by rank from the sorted list of matching trials.
+
+    Ranking a sorted list of video ids -- rather than taking whatever order the
+    trial table happens to be in -- is what makes an exemplar reproducible
+    across machines and across a regenerated trial table.
+
+    Args:
+        df_meta: trial table indexed by ``Video ID``.
+        trial_type: value of the table's ``trial`` column, e.g. ``"Straight"``.
+        idx_time: grayzone position to restrict to; ignored for trial types that
+            do not carry one.
+        exemplar_rank: position in the sorted list of matching video ids.
+
+    Returns:
+        The selected trial's ``Video ID``.
+    """
+    match = df_meta["trial"] == trial_type
+    if trial_type == _GRAYZONE_POSITION_TRIAL_TYPE and idx_time is not None:
+        match &= df_meta["idx_time"] == idx_time
+    video_ids = sorted(int(vid) for vid in df_meta.index[match])
+    if exemplar_rank >= len(video_ids):
+        raise ValueError(
+            f"exemplar_rank={exemplar_rank} is out of range: only "
+            f"{len(video_ids)} trial(s) match trial_type={trial_type!r}, "
+            f"idx_time={idx_time!r}"
+        )
+    return video_ids[exemplar_rank]
+
+
+def _grayzone_run_lengths(
+    samples: np.ndarray, df_meta: pd.DataFrame, trial_type: str
+) -> dict[int, int]:
+    """Final-occlusion run length per grayzone position, for one trial type.
+
+    The run length is a property of the grayzone position rather than of the
+    individual trial, so the modal run length within each position is taken.
+
+    Args:
+        samples: ``(n_videos, timesteps, 5)`` stimulus array.
+        df_meta: trial table indexed by ``Video ID``.
+        trial_type: value of the table's ``trial`` column.
+
+    Returns:
+        Mapping from grayzone position to occluded-run length.
+    """
+    subset = df_meta[df_meta["trial"] == trial_type]
+    positions = df_meta.index.get_indexer(subset.index)
+    lengths = subset["length"].to_numpy().astype(int)
+    runs = pd.Series(
+        [
+            length - _final_grayzone_entry(samples[row, :length, 2:])
+            for row, length in zip(positions, lengths, strict=True)
+        ],
+        index=subset["idx_time"].to_numpy(),
+    )
+    return {
+        int(position): int(group.mode().iloc[0])
+        for position, group in runs.groupby(level=0)
+    }
+
+
+def _ideal_observer_belief_curves_impl(
+    dataset: str,
+    trial_type: str,
+    sweep: str,
+    levels: tuple[tuple[str, float], ...],
+    fixed_pccnvc: float,
+    fixed_pccovc: float,
+    pvc: float,
+    idx_time: int | None,
+    exemplar_rank: int,
+    lead_in_frames: int,
+) -> pd.DataFrame:
+    """Belief curves for one exemplar trial -- see :func:`ideal_observer_belief_curves`."""
+    if sweep not in _SWEEP_PARAMETERS:
+        raise ValueError(
+            f"sweep={sweep!r} is not one of {sorted(_SWEEP_PARAMETERS)}"
+        )
+    if not levels:
+        raise ValueError("levels must contain at least one (name, value) pair")
+
+    base = _dataset_dir(dataset)
+    samples = np.load(str(base / "samples.npy"), allow_pickle=True)
+    df_meta = pd.read_csv(base / "trial_meta.csv", index_col=0)
+
+    video_id = _exemplar_video_id(df_meta, trial_type, idx_time, exemplar_rank)
+    row = int(df_meta.index.get_indexer([video_id])[0])
+    length = int(df_meta.loc[video_id, "length"])
+
+    # Padded frames drive the observer's belief to zero, so the trial is
+    # truncated to its own length before anything is computed from it.
+    trial = np.asarray(samples[row, :length], dtype=np.float32)
+    entry = _final_grayzone_entry(trial[:, 2:])
+    if entry == 0:
+        raise ValueError(
+            f"video {video_id} of {dataset!r} is occluded from its first frame, "
+            "so it has no last-visible colour to anchor the curve to"
+        )
+    start = max(0, entry - lead_in_frames)
+
+    # The colour the curve is anchored to: the one the ball last showed before
+    # it entered the final occlusion.
+    anchor_color = int(np.argmax(trial[entry - 1, 2:]))
+
+    window = slice(start, length)
+    frame = np.arange(length - start, dtype=np.int64)
+    occluded = (trial[window, 2:] == _GRAYZONE_LEVEL).all(axis=-1)
+
+    positions = torch.tensor(trial[None, :, :2], dtype=torch.float32)
+    bounce_model = IdealCountingObserverV2()
+    is_bounce = (
+        bounce_model._derive_bounce(
+            positions,
+            bounce_model.ball_radius,
+            int(bounce_model.size_x),
+            int(bounce_model.size_y),
+        )[0]
+        .numpy()[window]
+        .astype(bool)
+    )
+
+    # Vertical markers at the last occluded frame of each grayzone position,
+    # measured on this trial's window; positions whose run outruns the window
+    # simply have no marker.
+    endpoint_offsets: set[int] = set()
+    if trial_type == _GRAYZONE_POSITION_TRIAL_TYPE:
+        endpoint_offsets = {
+            (entry - start) + run - 1
+            for run in _grayzone_run_lengths(samples, df_meta, trial_type).values()
+        }
+    is_endpoint = np.isin(frame, sorted(endpoint_offsets))
+    endpoint_offset = pd.array(np.where(is_endpoint, frame, 0), dtype="Int64")
+    endpoint_offset[~is_endpoint] = pd.NA
+
+    swept = _SWEEP_PARAMETERS[sweep]
+    curves = []
+    for name, value in levels:
+        pccnvc = value if swept == "pccnvc" else fixed_pccnvc
+        pccovc = value if swept == "pccovc" else fixed_pccovc
+        # A fresh observer and a fresh input tensor per level: the observer
+        # carries per-call state and writes into the belief it propagates, so
+        # nothing may be shared between two sweeps.
+        observer = IdealBayesianObserver(0.0, 0.0, pvc)
+        inputs = torch.tensor(trial[None], dtype=torch.float32)
+        belief = observer(inputs, pccnvc=pccnvc, pccovc=pccovc)
+        p_change = 1.0 - belief[0, window, anchor_color].detach().numpy().astype(
+            np.float64
+        )
+        curves.append(
+            pd.DataFrame(
+                {
+                    "level": name,
+                    "param": float(value),
+                    "frame": frame,
+                    "p_change": p_change,
+                    "occluded": occluded,
+                    "is_bounce": is_bounce,
+                    "video_id": np.int64(video_id),
+                    "endpoint_offset": endpoint_offset,
+                }
+            )
+        )
+
+    out = pd.concat(curves, ignore_index=True)
+    # Level order follows the swept parameter, so legends and hue order read
+    # from the weakest level to the strongest whatever the names happen to be.
+    ordered = [name for name, _value in sorted(levels, key=lambda level: level[1])]
+    out["level"] = out["level"].astype(pd.CategoricalDtype(ordered, ordered=True))
+    return out
+
+
+@MEMORY.cache
+def ideal_observer_belief_curves(
+    dataset: str = "control_dataset",
+    trial_type: str = "Straight",
+    sweep: str = "hazard",
+    levels: tuple[tuple[str, float], ...] = (("High", 0.0245), ("Low", 0.0099)),
+    fixed_pccnvc: float = 0.0245,
+    fixed_pccovc: float = 0.5,
+    pvc: float = 0.0,
+    idx_time: int | None = 2,
+    exemplar_rank: int = 0,
+    lead_in_frames: int = 5,
+) -> pd.DataFrame:
+    """Ideal-observer colour-change probability for one trial, swept (memoized).
+
+    Runs :class:`~learning_in_context.models.ideal_observer.IdealBayesianObserver`
+    over a single exemplar trial once per swept level and reports, per frame,
+    ``1 - belief[c]`` where ``c`` is the colour the ball last showed on a
+    visible frame before its final occlusion. The window opens
+    ``lead_in_frames`` frames before that occlusion and runs to the end of the
+    trial.
+
+    The observer re-anchors its belief on every visible frame and then takes one
+    transition step, so on a visible frame showing ``c`` the probability equals
+    the swept parameter exactly; across occluded frames the belief is
+    transitioned repeatedly and saturates towards ``2/3``, the uniform value
+    over the two other colours. A wall bounce raises the transition probability
+    to the contingency parameter for that one frame, which is what separates
+    contingency levels; away from a wall the transition probability is the
+    hazard parameter alone, so with ``pvc=0`` contingency levels coincide until
+    the bounce.
+
+    The sweep holds the trial fixed and varies only the parameter, so the curves
+    describe the task's statistics rather than one trial's accidents. The pass
+    is deterministic -- there is no sampling anywhere in it -- so no seed is
+    taken or needed.
+
+    Args:
+        dataset: model-states dataset name (e.g. ``"control_dataset"``).
+        trial_type: value of the trial table's ``trial`` column, e.g.
+            ``"Straight"`` or ``"Bounce"``.
+        sweep: ``"hazard"`` sweeps ``pccnvc``, ``"contingency"`` sweeps
+            ``pccovc``.
+        levels: ``(label, value)`` pairs, one curve each, for the swept
+            parameter.
+        fixed_pccnvc: hazard rate held fixed when sweeping contingency.
+        fixed_pccovc: contingency held fixed when sweeping hazard.
+        pvc: probability of a velocity change away from a wall.
+        idx_time: grayzone position the exemplar is drawn from; ignored for
+            trial types that do not carry one.
+        exemplar_rank: position in the sorted list of matching video ids.
+        lead_in_frames: visible frames shown before the final occlusion.
+
+    Returns:
+        Tidy DataFrame, one row per (level, frame), with columns ``[level,
+        param, frame, p_change, occluded, is_bounce, video_id,
+        endpoint_offset]``. ``level`` is an ordered categorical running from the
+        smallest swept value to the largest; ``frame`` is zero at the window's
+        first frame; ``occluded`` and ``is_bounce`` mark the shaded band and the
+        wall bounce; ``video_id`` is constant within a call; and
+        ``endpoint_offset`` carries a frame's own offset on the frames that end
+        a grayzone position's occlusion, and is null elsewhere.
+    """
+    return _ideal_observer_belief_curves_impl(
+        dataset,
+        trial_type,
+        sweep,
+        levels,
+        fixed_pccnvc,
+        fixed_pccovc,
+        pvc,
+        idx_time,
+        exemplar_rank,
+        lead_in_frames,
+    )
