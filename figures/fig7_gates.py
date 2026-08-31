@@ -131,6 +131,18 @@ def _(np, paper_style):
 
 
 @app.cell
+def _(mo):
+    # Export toggle. Every render cell displays its figures inline and writes the
+    # SVGs only while this is on, so styling iterations in `marimo edit` need not
+    # touch disk. It defaults on, which is what a headless
+    # `python figures/fig7_gates.py` run sees — that run never touches the UI, so
+    # it still lands all four panels.
+    save_svgs = mo.ui.switch(value=True, label="Save SVG panels")
+    save_svgs
+    return (save_svgs,)
+
+
+@app.cell
 def _(np, plt, sns):
     # Render helpers (pure styling — SPEC rule 1: each panel self-contained).
 
@@ -231,6 +243,7 @@ def _(
     paper_style,
     pd,
     render_pointplot,
+    save_svgs,
     transforms,
 ):
     def _():
@@ -249,9 +262,12 @@ def _(
             title="All Models Cell\nUnit Interventions",
             palette=TYPE_PALETTE, figsize=FIGSIZE_PP,
         )
-        paper_style.save_panel(fig, 7, "cell_unit_interventions_all_models")
+        if save_svgs.value:
+            paper_style.save_panel(fig, 7, "cell_unit_interventions_all_models")
+        return fig
 
-    _()
+    _fig = _()
+    _fig
     return
 
 
@@ -269,6 +285,7 @@ def _(
     paper_style,
     pd,
     render_pointplot,
+    save_svgs,
     transforms,
 ):
     def _():
@@ -290,9 +307,12 @@ def _(
             title=f"All Models {pair} Gate\nRescue Interventions",
             palette=TYPE_PALETTE, figsize=FIGSIZE_PP,
         )
-        paper_style.save_panel(fig, 7, "gate_rescue_input_forget")
+        if save_svgs.value:
+            paper_style.save_panel(fig, 7, "gate_rescue_input_forget")
+        return fig
 
-    _()
+    _fig = _()
+    _fig
     return
 
 
@@ -311,8 +331,10 @@ def _(
     FIGSIZE_SCATTER,
     MODEL,
     MODELS,
+    mo,
     paper_style,
     render_gate_scatter,
+    save_svgs,
     transforms,
 ):
     def _():
@@ -321,15 +343,16 @@ def _(
 
         # bottom-left — single-model scatter, untitled (DS6.4:568-590).
         single = plot_df[plot_df["model"] == EXEMPLAR]
-        fig = render_gate_scatter(single, figsize=FIGSIZE_SCATTER)
-        paper_style.save_panel(fig, 7, "gate_scatter_delta_forget_input")
+        fig_single = render_gate_scatter(single, figsize=FIGSIZE_SCATTER)
+        if save_svgs.value:
+            paper_style.save_panel(fig_single, 7, "gate_scatter_delta_forget_input")
 
         # bottom-right — aggregated unit-mean scatter (reconstructed backup
         # DS6.4:1150-1195): one point per (colour_entered, model).
         agg = plot_df.groupby(["color_entered", "model"], as_index=False)[
             ["i", "f", "g", "o"]
         ].mean()
-        fig = render_gate_scatter(
+        fig_mean = render_gate_scatter(
             agg, figsize=FIGSIZE_SCATTER,
             title=(
                 "Delta (High Hz - Low Hz) Forget vs Input"
@@ -337,9 +360,15 @@ def _(
             ),
             label_suffix=" (unit-mean)",
         )
-        paper_style.save_panel(fig, 7, "gate_scatter_delta_forget_input_unit_mean")
+        if save_svgs.value:
+            paper_style.save_panel(
+                fig_mean, 7, "gate_scatter_delta_forget_input_unit_mean"
+            )
 
-    _()
+        return [fig_single, fig_mean]
+
+    _figs = _()
+    mo.vstack(_figs)
     return
 
 

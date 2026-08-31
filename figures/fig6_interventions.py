@@ -146,6 +146,18 @@ def _(np, paper_style):
 
 
 @app.cell
+def _(mo):
+    # Export toggle. Every render cell displays its figures inline and writes the
+    # SVGs only while this is on, so styling iterations in `marimo edit` need not
+    # touch disk. It defaults on, which is what a headless
+    # `python figures/fig6_interventions.py` run sees — that run never touches
+    # the UI, so it still lands all eight panels.
+    save_svgs = mo.ui.switch(value=True, label="Save SVG panels")
+    save_svgs
+    return (save_svgs,)
+
+
+@app.cell
 def _(FuncFormatter, Line2D, math, np, paper_style, plt, sns, get_color_palette):
     # Render helpers (pure styling — SPEC rule 1: each panel self-contained).
 
@@ -343,11 +355,14 @@ def _(
     TIMESTEPS_PLOT,
     TIMESTEP_INTERVENTION,
     FIGSIZE_TC,
+    mo,
     paper_style,
     render_interventions_rows,
+    save_svgs,
     transforms,
 ):
     def _():
+        figs = []
         for unit, word, name in (
             ("hidden", "Hidden", "intervention_timecourse_hz_hidden"),  # G
             ("cell", "Cell", "intervention_timecourse_hz_cell"),        # I
@@ -363,9 +378,13 @@ def _(
                 vline=TIMESTEP_INTERVENTION,
                 figsize=FIGSIZE_TC,
             )
-            paper_style.save_panel(fig, 6, name)
+            if save_svgs.value:
+                paper_style.save_panel(fig, 6, name)
+            figs.append(fig)
+        return figs
 
-    _()
+    _figs = _()
+    mo.vstack(_figs)
     return
 
 
@@ -378,13 +397,16 @@ def _(
     MODELS,
     TIMESTEPS_PLOT,
     TYPE_PALETTE,
+    mo,
     paper_style,
     pd,
     render_pointplot,
+    save_svgs,
     transforms,
     add_type,
 ):
     def _():
+        figs = []
         for unit, word, name in (
             ("hidden", "Hidden", "summary_pointplot_hz_hidden"),  # H
             ("cell", "Cell", "summary_pointplot_hz_cell"),        # J
@@ -402,9 +424,13 @@ def _(
                 title=f"All Models {word}\nUnit Interventions",
                 palette=TYPE_PALETTE, figsize=FIGSIZE_PP,
             )
-            paper_style.save_panel(fig, 6, name)
+            if save_svgs.value:
+                paper_style.save_panel(fig, 6, name)
+            figs.append(fig)
+        return figs
 
-    _()
+    _figs = _()
+    mo.vstack(_figs)
     return
 
 
@@ -426,11 +452,14 @@ def _(
     N_CONT,
     TIMESTEP_INTERVENTION,
     FIGSIZE_TC,
+    mo,
     paper_style,
     render_interventions_rows,
+    save_svgs,
     transforms,
 ):
     def _():
+        figs = []
         for unit, word, name in (
             ("hidden", "Hidden", "intervention_timecourse_ct_hidden"),  # K
             ("cell", "Cell", "intervention_timecourse_ct_cell"),        # M
@@ -451,9 +480,13 @@ def _(
                 vline=TIMESTEP_INTERVENTION,
                 figsize=FIGSIZE_TC,
             )
-            paper_style.save_panel(fig, 6, name)
+            if save_svgs.value:
+                paper_style.save_panel(fig, 6, name)
+            figs.append(fig)
+        return figs
 
-    _()
+    _figs = _()
+    mo.vstack(_figs)
     return
 
 
@@ -467,9 +500,11 @@ def _(
     MODELS,
     N_CONT,
     TYPE_PALETTE,
+    mo,
     paper_style,
     pd,
     render_pointplot,
+    save_svgs,
     transforms,
     add_type,
 ):
@@ -478,6 +513,7 @@ def _(
         # "Hidden" copy-paste bug over what is genuinely the cell-unit
         # contingency frame). The word is taken straight from the unit here, so
         # both L (hidden) and N (cell) render the correct unit.
+        figs = []
         for unit, word, name in (
             ("hidden", "Hidden", "summary_pointplot_ct_hidden"),  # L
             ("cell", "Cell", "summary_pointplot_ct_cell"),        # N (ruling 9)
@@ -500,9 +536,13 @@ def _(
                 title=f"All Models {word}\nUnit Interventions",
                 palette=TYPE_PALETTE, figsize=FIGSIZE_PP,
             )
-            paper_style.save_panel(fig, 6, name)
+            if save_svgs.value:
+                paper_style.save_panel(fig, 6, name)
+            figs.append(fig)
+        return figs
 
-    _()
+    _figs = _()
+    mo.vstack(_figs)
     return
 
 

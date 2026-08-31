@@ -109,6 +109,18 @@ def _(np, paper_style):
 
 
 @app.cell
+def _(mo):
+    # Export toggle. Every render cell displays its figures inline and writes the
+    # SVGs only while this is on, so styling iterations in `marimo edit` need not
+    # touch disk. It defaults on, which is what a headless
+    # `python figures/fig5_unit_activity.py` run sees — that run never touches
+    # the UI, so it still lands all twelve panels.
+    save_svgs = mo.ui.switch(value=True, label="Save SVG panels")
+    save_svgs
+    return (save_svgs,)
+
+
+@app.cell
 def _(plt, sns):
     # Render helpers (pure styling — SPEC rule 1: each panel self-contained).
     def render_timecourse(
@@ -233,8 +245,10 @@ def _(
     FIGSIZE_TC,
     T,
     df_hz_tc,
+    mo,
     paper_style,
     render_timecourse,
+    save_svgs,
     viridis_palette,
 ):
     def _():
@@ -243,6 +257,7 @@ def _(
             "High": [f"Change {i + 1}" for i in range(8)],
         }
         palette = viridis_palette("Change", 8)
+        figs = []
         for unit, word, name in (
             (15, "Hidden", "activity_timecourse_hazard_rate_hidden"),
             (31, "Cell", "activity_timecourse_hazard_rate_cell"),
@@ -260,23 +275,32 @@ def _(
                 T=T,
                 figsize=FIGSIZE_TC,
             )
-            paper_style.save_panel(fig, 5, name)
+            if save_svgs.value:
+                paper_style.save_panel(fig, 5, name)
+            figs.append(fig)
+        return figs
 
-    _()
+    _figs = _()
+    mo.vstack(_figs)
     return
 
 
 @app.cell
-def _(FIGSIZE_PROFILE, df_hz_profile, paper_style, render_profile):
+def _(FIGSIZE_PROFILE, df_hz_profile, mo, paper_style, render_profile, save_svgs):
     def _():
+        figs = []
         for state, name in (
             ("hidden", "activity_profile_hazard_rate_hidden"),
             ("cell", "activity_profile_hazard_rate_cell"),
         ):
             fig = render_profile(df_hz_profile, state, FIGSIZE_PROFILE)
-            paper_style.save_panel(fig, 5, name)
+            if save_svgs.value:
+                paper_style.save_panel(fig, 5, name)
+            figs.append(fig)
+        return figs
 
-    _()
+    _figs = _()
+    mo.vstack(_figs)
     return
 
 
@@ -324,8 +348,10 @@ def _(
     FIGSIZE_TC,
     T,
     df_cont_tc,
+    mo,
     paper_style,
     render_timecourse,
+    save_svgs,
     viridis_palette,
 ):
     def _():
@@ -336,6 +362,7 @@ def _(
             "High": [f"Color Change {i + 1}" for i in range(6)],
         }
         palette = viridis_palette("Color Change", 6)
+        figs = []
         for unit, word, name in (
             (11, "Hidden", "activity_timecourse_contingency_hidden"),
             (27, "Cell", "activity_timecourse_contingency_cell"),
@@ -354,23 +381,32 @@ def _(
                 figsize=FIGSIZE_TC,
                 errorbar="ci",  # matches fig_contingency_activity.py render default
             )
-            paper_style.save_panel(fig, 5, name)
+            if save_svgs.value:
+                paper_style.save_panel(fig, 5, name)
+            figs.append(fig)
+        return figs
 
-    _()
+    _figs = _()
+    mo.vstack(_figs)
     return
 
 
 @app.cell
-def _(FIGSIZE_PROFILE, df_cont_profile, paper_style, render_profile):
+def _(FIGSIZE_PROFILE, df_cont_profile, mo, paper_style, render_profile, save_svgs):
     def _():
+        figs = []
         for state, name in (
             ("hidden", "activity_profile_contingency_hidden"),
             ("cell", "activity_profile_contingency_cell"),
         ):
             fig = render_profile(df_cont_profile, state, FIGSIZE_PROFILE)
-            paper_style.save_panel(fig, 5, name)
+            if save_svgs.value:
+                paper_style.save_panel(fig, 5, name)
+            figs.append(fig)
+        return figs
 
-    _()
+    _figs = _()
+    mo.vstack(_figs)
     return
 
 
@@ -418,8 +454,10 @@ def _(
     FIGSIZE_TC,
     T,
     df_cont_nc_tc,
+    mo,
     paper_style,
     render_timecourse,
+    save_svgs,
     viridis_palette,
 ):
     def _():
@@ -428,6 +466,7 @@ def _(
             "High": [f"No Color Change {i + 1}" for i in range(7)],
         }
         palette = viridis_palette("No Color Change", 7)
+        figs = []
         for unit, word, name in (
             (11, "Hidden", "activity_timecourse_contingency_no_change_hidden"),
             (27, "Cell", "activity_timecourse_contingency_no_change_cell"),
@@ -446,23 +485,39 @@ def _(
                 figsize=FIGSIZE_TC,
                 errorbar="ci",  # matches fig_contingency_activity.py render default
             )
-            paper_style.save_panel(fig, 5, name)
+            if save_svgs.value:
+                paper_style.save_panel(fig, 5, name)
+            figs.append(fig)
+        return figs
 
-    _()
+    _figs = _()
+    mo.vstack(_figs)
     return
 
 
 @app.cell
-def _(FIGSIZE_PROFILE, df_cont_nc_profile, paper_style, render_profile):
+def _(
+    FIGSIZE_PROFILE,
+    df_cont_nc_profile,
+    mo,
+    paper_style,
+    render_profile,
+    save_svgs,
+):
     def _():
+        figs = []
         for state, name in (
             ("hidden", "activity_profile_contingency_no_change_hidden"),
             ("cell", "activity_profile_contingency_no_change_cell"),
         ):
             fig = render_profile(df_cont_nc_profile, state, FIGSIZE_PROFILE)
-            paper_style.save_panel(fig, 5, name)
+            if save_svgs.value:
+                paper_style.save_panel(fig, 5, name)
+            figs.append(fig)
+        return figs
 
-    _()
+    _figs = _()
+    mo.vstack(_figs)
     return
 
 

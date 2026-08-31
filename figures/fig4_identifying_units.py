@@ -108,6 +108,18 @@ def _(paper_style):
 
 
 @app.cell
+def _(mo):
+    # Export toggle. Every render cell displays its figure inline and writes the
+    # SVG only while this is on, so styling iterations in `marimo edit` need not
+    # touch disk. It defaults on, which is what a headless
+    # `python figures/fig4_identifying_units.py` run sees — that run never
+    # touches the UI, so it still lands all four panels.
+    save_svgs = mo.ui.switch(value=True, label="Save SVG panels")
+    save_svgs
+    return (save_svgs,)
+
+
+@app.cell
 def _(np, plt):
     # Render helper — score curve (ported from DS2.1 plot_coefs_and_metrics's
     # ax1 block, the fixed form; SPEC rule 1: self-contained single panel).
@@ -260,7 +272,7 @@ def _(mo):
 
 
 @app.cell
-def _(FIGSIZE_SCORE, VLINE_HZ, fit_hz, paper_style, render_score_curve):
+def _(FIGSIZE_SCORE, VLINE_HZ, fit_hz, paper_style, render_score_curve, save_svgs):
     def _():
         fig = render_score_curve(
             metrics=fit_hz["metrics"],
@@ -270,14 +282,17 @@ def _(FIGSIZE_SCORE, VLINE_HZ, fit_hz, paper_style, render_score_curve):
             vline_performance=(VLINE_HZ, "accuracy"),
             figsize=FIGSIZE_SCORE,
         )
-        paper_style.save_panel(fig, 4, "score_curves_hazard_rate")
+        if save_svgs.value:
+            paper_style.save_panel(fig, 4, "score_curves_hazard_rate")
+        return fig
 
-    _()
+    _fig = _()
+    _fig
     return
 
 
 @app.cell
-def _(FIGSIZE_HEATMAP, VLINE_HZ, fit_hz, paper_style, render_coef_heatmap):
+def _(FIGSIZE_HEATMAP, VLINE_HZ, fit_hz, paper_style, render_coef_heatmap, save_svgs):
     def _():
         fig = render_coef_heatmap(
             coefs=fit_hz["coefs"],
@@ -285,9 +300,12 @@ def _(FIGSIZE_HEATMAP, VLINE_HZ, fit_hz, paper_style, render_coef_heatmap):
             figsize=FIGSIZE_HEATMAP,
             vline_index=VLINE_HZ,
         )
-        paper_style.save_panel(fig, 4, "coef_heatmap_hazard_rate")
+        if save_svgs.value:
+            paper_style.save_panel(fig, 4, "coef_heatmap_hazard_rate")
+        return fig
 
-    _()
+    _fig = _()
+    _fig
     return
 
 
@@ -301,7 +319,7 @@ def _(mo):
 
 
 @app.cell
-def _(FIGSIZE_SCORE, VLINE_CONT, fit_cont, paper_style, render_score_curve):
+def _(FIGSIZE_SCORE, VLINE_CONT, fit_cont, paper_style, render_score_curve, save_svgs):
     def _():
         fig = render_score_curve(
             metrics=fit_cont["metrics"],
@@ -311,14 +329,24 @@ def _(FIGSIZE_SCORE, VLINE_CONT, fit_cont, paper_style, render_score_curve):
             vline_performance=(VLINE_CONT, "accuracy"),
             figsize=FIGSIZE_SCORE,
         )
-        paper_style.save_panel(fig, 4, "score_curves_contingency")
+        if save_svgs.value:
+            paper_style.save_panel(fig, 4, "score_curves_contingency")
+        return fig
 
-    _()
+    _fig = _()
+    _fig
     return
 
 
 @app.cell
-def _(FIGSIZE_HEATMAP, VLINE_CONT, fit_cont, paper_style, render_coef_heatmap):
+def _(
+    FIGSIZE_HEATMAP,
+    VLINE_CONT,
+    fit_cont,
+    paper_style,
+    render_coef_heatmap,
+    save_svgs,
+):
     def _():
         fig = render_coef_heatmap(
             coefs=fit_cont["coefs"],
@@ -326,9 +354,12 @@ def _(FIGSIZE_HEATMAP, VLINE_CONT, fit_cont, paper_style, render_coef_heatmap):
             figsize=FIGSIZE_HEATMAP,
             vline_index=VLINE_CONT,
         )
-        paper_style.save_panel(fig, 4, "coef_heatmap_contingency")
+        if save_svgs.value:
+            paper_style.save_panel(fig, 4, "coef_heatmap_contingency")
+        return fig
 
-    _()
+    _fig = _()
+    _fig
     return
 
 
