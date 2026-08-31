@@ -253,11 +253,37 @@ class IdealCountingObserverV2(torch.nn.Module):
         acc_fail_cont = torch.zeros(batch_size, device=device)
         inside_gray = torch.zeros(batch_size, dtype=torch.bool, device=device)
 
+        # DEFECT-1 fix: a grayzone run that OPENS the sequence has no observed
+        # entry colour, so the observer has zero information about whether the
+        # colour changed across it -- accumulating expected counts there adds
+        # ``exp_change = mean_hz`` pseudo-counts drawn from the (state-constant)
+        # hazard itself: no mean shift, only spurious confidence. It was also the
+        # source of an orphaned tab: for a length-1 opening run the exit guard
+        # ``visible_now & inside_gray`` never fires (``inside_gray`` starts
+        # False), so the accumulated pair was neither flushed nor zeroed and
+        # leaked into the NEXT run's flush -- or, in a padded batch, into the
+        # end-of-sequence flush (padding drives ``inside_gray`` True), making the
+        # betas depend on the batch's shape.
+        # ``anchored`` is False until a visible frame has been seen and then
+        # latches True forever, so it gates ONLY the opening run: for every
+        # mid-sequence and terminal run ``accumulating == gray_transition`` and
+        # the arithmetic is bit-identical to before.
+        anchored = mask_valid[:, 0] & ~is_gray[:, 0]
+
         p_change_now = torch.zeros(batch_size, timesteps, device=device) if return_means else None
 
         # ===================================================================== loop
         for t in range(1, timesteps):
-            color_belief = color_beliefs[:, t]
+            # W8 fix: the recursion needs the PREVIOUS belief. This previously
+            # read slot ``t``, which is only written at the end of this same
+            # iteration and so was still at its 1/3 init -- the filter restarted
+            # from uniform every step and every non-visible slot (grayzone and
+            # padded alike) came out uniform.
+            # The loop starts at t=1, so ``t - 1`` is never negative and cannot
+            # wrap to the last slot; slot 0 is never written inside the loop and
+            # therefore still holds the uniform prior, which is the correct t=0
+            # prior for the first update.
+            color_belief = color_beliefs[:, t - 1]
 
             # --- masks for *this* pair of frames ----------------------------------
             valid_prev = mask_valid[:, t - 1]
@@ -294,9 +320,17 @@ class IdealCountingObserverV2(torch.nn.Module):
             gray_transition = step_valid & ~nongray_transition  # any part hidden
 
             # -------------------- (1) hidden step → accumulate expectations -------
-            if gray_transition.any():
-                mask_no_bounce = gray_transition & (~bounce_t)
-                mask_bounce = gray_transition & bounce_t
+            # DEFECT-1: only a run with an observed entry colour is accountable.
+            # This gate covers the whole opening run INCLUDING its exit
+            # transition (``anchored`` is still False when the exit frame's
+            # transition is classified), and it covers hz and cont together --
+            # ``acc_*_cont`` also spends ``exp_change``, which is a functional of
+            # ``color_belief``, so bounce-coincident colour classification inside
+            # an anchorless run is exactly as unaccountable as the no-bounce kind.
+            accumulating = gray_transition & anchored
+            if accumulating.any():
+                mask_no_bounce = accumulating & (~bounce_t)
+                mask_bounce = accumulating & bounce_t
 
                 acc_succ_hz += exp_change * mask_no_bounce.float()
                 acc_fail_hz += exp_no_change * mask_no_bounce.float()
@@ -339,6 +373,10 @@ class IdealCountingObserverV2(torch.nn.Module):
 
             # update inside_gray for the next frame
             inside_gray = (~visible_now) | (inside_gray & gray_transition)
+            # DEFECT-1: latch the anchor AFTER the accumulation block, so the
+            # opening run's own exit transition is still treated as anchorless.
+            # From the first visible frame on, every subsequent run is anchored.
+            anchored = anchored | visible_now
 
             color_pred = torch.einsum("bs,bsj->bj", color_belief, T)
 
@@ -544,15 +582,48 @@ class IdealCountingObserver(IdealObserverModel):
             mask_idx_after_grayzone[:, 1:],
         )
 
+        # DRIFT-1 fix: attribute a velocity change to the run it happened IN.
+        # Index conventions in this method: ``velocity_change_*[j]`` is a change
+        # AT frame j+1 (the second difference of positions j..j+2), whereas
+        # ``mask_grayzone[:, 2:][j]`` -- the run mask -- is frame j+2. The old
+        # gate ``velocity_change_*[j] & mask_grayzone[:, 2:][j]`` therefore read
+        # "vc at frame i AND frame i+1 gray", i.e. the window [s-1, e-1]: it
+        # stole a vc on the last VISIBLE frame before entry and dropped the one
+        # on the last HIDDEN frame e. The SPEC (design doc, "The causal rule")
+        # is [s, e].
+        # The fix lifts the flags into ABSOLUTE frame space (index == frame; the
+        # first and last frames are never a detected change, since the second
+        # difference needs a neighbour on both sides) and gates on the SAME
+        # frame, then re-slices at [:, 2:] so the change mask shares the index
+        # space of ``mask_run``. Sharing that index space is what makes the
+        # window exactly [s, e]: ``find_overlapping_grayzone`` only advances
+        # ``seen`` while ``mask_run[j]`` is True, i.e. over j in [s-2, e-2] <->
+        # frames [s, e]. NB gating with ``mask_grayzone[:, 1:-1]`` instead --
+        # right condition, wrong index space -- would leave the change for frame
+        # e sitting on the exit cell where ``seen`` no longer accumulates,
+        # yielding [s, e-1] and, on a length-1 run (s == e), an EMPTY window.
+        # KNOWN LIMITATION (pre-existing, not introduced here): ``mask_run`` is
+        # the ``[:, 2:]`` slice, so frames 0 and 1 have no cell at all and the
+        # realised window is [max(s, 2), e]. A run opening at frame 0 or 1 is
+        # attributable only from frame 2 on -- the one place this is narrower
+        # than the SPEC, and than the old gate (which reached frame 1 via j=0).
+        # ``mask_cells`` and ``mask_run`` are untouched; so are the public
+        # ``self.velocity_change_*`` attributes (the builder-validation tests
+        # assert on them directly) -- these are locals.
+        velocity_change_bounce_at_frame = torch.zeros_like(mask_grayzone)
+        velocity_change_bounce_at_frame[:, 1:-1] = self.velocity_change_bounce
+        velocity_change_random_at_frame = torch.zeros_like(mask_grayzone)
+        velocity_change_random_at_frame[:, 1:-1] = self.velocity_change_random
+
         mask_grayzone_with_velocity_change_bounce = self.find_overlapping_grayzone(
             mask_grayzone[:, 2:] | mask_idx_after_grayzone[:, 1:],
-            self.velocity_change_bounce & mask_grayzone[:, 2:],
+            (velocity_change_bounce_at_frame & mask_grayzone)[:, 2:],
             mask_grayzone[:, 2:],
         )
 
         mask_grayzone_with_velocity_change_random = self.find_overlapping_grayzone(
             mask_grayzone[:, 2:] | mask_idx_after_grayzone[:, 1:],
-            self.velocity_change_random & mask_grayzone[:, 2:],
+            (velocity_change_random_at_frame & mask_grayzone)[:, 2:],
             mask_grayzone[:, 2:],
         )
 
@@ -583,15 +654,29 @@ class IdealCountingObserver(IdealObserverModel):
 
         # Make a new change array that shifts grayzone velocity changes to be the
         # index after the grayzone so that color counts are updated properly
+        # DRIFT-1 fix (second half): the strip must only remove flags for HIDDEN
+        # frames. ``velocity_change_*_shifted[j]`` is a change at frame j+1,
+        # while the overlap mask spans run cells + exit cell, j in [s-2, e-1] <->
+        # frames [s-1, e]. Stripping on the bare overlap therefore deleted a vc
+        # on frame s-1 -- the last VISIBLE frame before entry, which the observer
+        # saw with its own eyes -- and relocated it to the exit. Gating with
+        # ``mask_grayzone[:, 1:-1]`` ("frame j+1 is gray") clips the strip to
+        # frames [s, e] <-> j in [s-1, e-1], so frame s-1 keeps its own flag.
+        # The exit cell j = e-1 is then re-set True, carrying the run's aggregate
+        # to the index that pairs with the exit-frame colour change.
         self.velocity_change_bounce_shifted = self.velocity_change_bounce.clone()
 
-        self.velocity_change_bounce_shifted[mask_grayzone_with_velocity_change_bounce] = False
+        self.velocity_change_bounce_shifted[
+            mask_grayzone_with_velocity_change_bounce & mask_grayzone[:, 1:-1]
+        ] = False
         self.velocity_change_bounce_shifted[
             mask_grayzone_with_velocity_change_bounce & mask_idx_after_grayzone[:, 1:]
         ] = True
 
         self.velocity_change_random_shifted = self.velocity_change_random.clone()
-        self.velocity_change_random_shifted[mask_grayzone_with_velocity_change_random] = False
+        self.velocity_change_random_shifted[
+            mask_grayzone_with_velocity_change_random & mask_grayzone[:, 1:-1]
+        ] = False
         self.velocity_change_random_shifted[
             mask_grayzone_with_velocity_change_random & mask_idx_after_grayzone[:, 1:]
         ] = True

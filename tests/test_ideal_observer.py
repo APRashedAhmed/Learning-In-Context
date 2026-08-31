@@ -144,6 +144,13 @@ class TestIdealCountingObserver:
     def test_bounce_contingent_channel_is_exercised(self, samples):
         # seq0 has an OOB bounce with a coincident color change, so its pccovc
         # estimate must move off the (1, 1) prior mean of 0.5.
+        # NB the channel is exercised through its FAILURE count, not its success
+        # count: `color_change_bounce` is all-zero here because the pairing is
+        # itself skewed by one -- `velocity_change[j]` is frame j+1 while
+        # `color_change[:, 1:][j]` is frame j+2, so a genuinely coincident
+        # bounce+colour change never lands in the same slot. That skew is a
+        # separate, pre-existing defect (out of scope for DRIFT-1, which only
+        # moves the GRAYZONE attribution window).
         ico = IdealCountingObserver(prog_bar=False)
         _, _, m_ovc, _ = ico(samples, return_means=True)
         assert not torch.isclose(m_ovc[0, -1], torch.tensor(0.5), atol=ATOL)
@@ -156,15 +163,94 @@ class TestIdealCountingObserver:
             torch.tensor([[0.236345, 0.0, 0.763655], [1 / 3, 1 / 3, 1 / 3]]),
             atol=ATOL,
         )
-        assert torch.allclose(m_nvc[:, -1], torch.tensor([0.235294, 0.263158]), atol=ATOL)
-        assert torch.allclose(m_ovc[:, -1], torch.tensor([0.25, 0.333333]), atol=ATOL)
-        assert torch.allclose(m_pvc[:, -1], torch.tensor([0.071429, 0.071429]), atol=ATOL)
+        # DRIFT-1 (attribution window [s-1, e-1] -> the SPEC's [s, e]) moves seq1
+        # ONLY. HAND-DERIVED (pending empirical confirmation):
+        #   seq0 grayzone run [4, 6]; its only vc is the bounce at frame 2, which
+        #     is outside BOTH the old window [3, 5] and the new [4, 6] -- so seq0
+        #     is untouched (beliefs and all three rates unchanged).
+        #   seq1 grayzone run [3, 4]; its only vc is the bounce at frame 2, which
+        #     WAS inside the old window [2, 3] and is NOT inside the new [3, 4].
+        #     The spurious attribution is gone, so the bounce keeps its own index
+        #     instead of being relocated to the exit cell:
+        #     velocity_change_shifted moves from j=3 to j=1. With the offset=2
+        #     head duplication in get_dist_params that flips the counts to
+        #       pccnvc (12, 4) -> mean 5/18,  pccovc (2, 0) -> mean 1/4.
+        #   beliefs[1, -1] is a PAD frame, never written in the loop, so it stays
+        #     at the 1/3 init regardless.
+        assert torch.allclose(m_nvc[:, -1], torch.tensor([4 / 17, 5 / 18]), atol=ATOL)
+        assert torch.allclose(m_ovc[:, -1], torch.tensor([0.25, 0.25]), atol=ATOL)
+        assert torch.allclose(m_pvc[:, -1], torch.tensor([1 / 14, 1 / 14]), atol=ATOL)
 
     def test_deterministic(self, samples):
         ico = IdealCountingObserver(prog_bar=False)
         a = ico(samples, return_means=False)
         b = ico(samples, return_means=False)
         assert torch.equal(a, b)
+
+    def test_attribution_window_is_spec_closed_interval(self):
+        # DRIFT-1. Pins the SPEC's [s, e] attribution window on EXACT boolean
+        # arrays (no Dirichlet arithmetic, no offset=2 head duplication), on the
+        # two cases where [s, e] and the old [s-1, e-1] disagree.
+        #
+        # row A -- LENGTH-1 grayzone run at frame 4 carrying a bounce vc at
+        #   frame 4, with a colour change across the run (R -> G at the exit).
+        #   x = [236, 240, 244, 248, 252, 248, 244, 240]
+        #     v      = [ 4, 4, 4, 4, -4, -4, -4]
+        #     v2diff = [ 0, 0, 0, -8,  0,  0]  -> velocity_change[3] (frame 4)
+        #     oob    = frames 3, 4, 5 (x > 246) -> the vc at frame 4 is a BOUNCE
+        #   NB the oob span is deliberately 3 frames wide (the flip has to happen
+        #   OUTSIDE the box for the vc frame to be oob); do not "tidy" these
+        #   positions without re-deriving which frames are bounces.
+        #   s = e = 4, exit 5. New window [4, 4] contains it; old window [3, 3]
+        #   does not, so the exit-frame colour change used to be misfiled as a
+        #   RANDOM colour change (colour changed with no attributable vc).
+        #     broken -> ico.color_change_random[0] == [0, 0, 0, 1, 0, 0]
+        #     fixed  -> all zeros (the change is attributed to the run's bounce).
+        #
+        # row B -- run [4, 5] with a random vc on frame 3 (the last VISIBLE frame
+        #   before entry) AND a random vc on frame 4 (inside the run).
+        #   x = [100, 104, 108, 112, 108, 112, 116, 120]
+        #     v      = [ 4, 4, 4, -4, 4, 4, 4]
+        #     v2diff = [ 0, 0, -8, 8, 0, 0]  -> velocity_change[2], [3]
+        #                                       (frames 3 and 4); never oob
+        #   Only frame 4 is inside [s, e] = [4, 5]. Frame 3's vc must keep its
+        #   own index (j = 2), while the run's aggregate lands on the exit cell
+        #   (j = 4). The old code registered frame 3's vc as the run's cause AND
+        #   stripped it from its own index:
+        #     broken -> velocity_change_random_shifted[1] == [F,F,F,F,T,F]
+        #     fixed  -> [F, F, T, F, T, F]
+        # fmt: off
+        pos_a = [[236.0, 128.0], [240.0, 128.0], [244.0, 128.0], [248.0, 128.0],
+                 [252.0, 128.0], [248.0, 128.0], [244.0, 128.0], [240.0, 128.0]]
+        pos_b = [[100.0, 128.0], [104.0, 128.0], [108.0, 128.0], [112.0, 128.0],
+                 [108.0, 128.0], [112.0, 128.0], [116.0, 128.0], [120.0, 128.0]]
+        col_a = [_R, _R, _R, _R, _GRAY, _G, _G, _G]
+        col_b = [_R, _R, _R, _R, _GRAY, _GRAY, _G, _G]
+        # fmt: on
+        samples = torch.cat(
+            [
+                torch.tensor([pos_a, pos_b], dtype=torch.float),
+                torch.tensor([col_a, col_b], dtype=torch.float),
+            ],
+            dim=-1,
+        )
+        ico = IdealCountingObserver(prog_bar=False)
+        ico(samples, return_means=True)
+
+        # detectors themselves are untouched by DRIFT-1 (alignment: index j <-> frame j+1)
+        assert ico.velocity_change_bounce[0].tolist() == [False, False, False, True, False, False]
+        assert ico.velocity_change_random[1].tolist() == [False, False, True, True, False, False]
+
+        # row A: the run's own bounce now explains the exit-frame colour change
+        assert ico.color_change_random[0].tolist() == [0.0] * 6
+        # ... and a length-1 run leaves the aggregate on the exit cell (j = e - 1 = 3)
+        expected_a = [False, False, False, True, False, False]
+        assert ico.velocity_change_bounce_shifted[0].tolist() == expected_a
+
+        # row B: frame 3 (last visible pre-entry) keeps its own index j = 2;
+        # the run's aggregate lands on the exit cell j = 4.
+        expected_b = [False, False, True, False, True, False]
+        assert ico.velocity_change_random_shifted[1].tolist() == expected_b
 
 
 class TestIdealCountingObserverV2:
@@ -208,9 +294,86 @@ class TestIdealCountingObserverV2:
         assert torch.allclose(
             out["betas"], torch.tensor([[2.0, 12.0, 2.0, 1.0], [3.0, 8.0, 2.0, 1.0]]), atol=ATOL
         )
+        # seq0's final frame is VISIBLE (blue), so its belief is the one-hot of the
+        # observation regardless of the recursion -- unchanged by the W8 fix.
+        # seq1's final frame is PADDED. Padded rows are still propagated through T
+        # every step (a characterization quirk that predates W8). Pre-fix every step
+        # read the uniform init, so every non-visible slot -- grayzone and padded
+        # alike -- came out uniform; post-W8 the last visible belief is carried
+        # forward.
+        # HAND-DERIVED (pending empirical confirmation): seq1's counts freeze at
+        # alpha_hz=3, beta_hz=8 after t=10, so p_change = 3/11 for t=11..13 and the
+        # belief evolves [0,1,0] -> [0,8,3]/11 -> [9,64,48]/121 -> [216,539,576]/1331.
         assert torch.allclose(
             out["beliefs"][:, -1],
-            torch.tensor([[0.0, 0.0, 1.0], [1 / 3, 1 / 3, 1 / 3]]),
+            torch.tensor([[0.0, 0.0, 1.0], [216 / 1331, 539 / 1331, 576 / 1331]]),
             atol=ATOL,
         )
         assert torch.allclose(out["p_change"][:, -1], torch.tensor([0.153846, 0.0]), atol=ATOL)
+
+    def test_opening_grayzone_contributes_nothing(self):
+        # DEFECT-1. A grayzone run that OPENS the sequence has no observed entry
+        # colour, so it must contribute nothing to the change/no-change counts.
+        # Straight-line positions (no oob, constant velocity) => no bounces, so
+        # only the hz channel can move and cont stays at the (1, 1) prior.
+        #
+        # HAND-DERIVED (pending empirical confirmation), colours
+        # [GRAY, R, R, GRAY, R, R]:
+        #   t=1  hidden (gray -> R), run is ANCHORLESS -> no accumulation.
+        #        belief seeded from the exit colour by the visible-frame emission
+        #        path: uniform prior * one-hot(R) -> [1, 0, 0].
+        #   t=2  visible R -> R, unchanged, no bounce -> beta_hz = 2.
+        #   t=3  hidden (R -> gray), ANCHORED. mean_hz = 1/3, belief [1, 0, 0]
+        #        -> acc = (1/3, 2/3).
+        #   t=4  hidden (gray -> R), still mean_hz = 1/3 (the flush lands after
+        #        the accumulation) -> acc = (2/3, 4/3); exit flush ->
+        #        alpha_hz = 1 + 2/3 = 5/3, beta_hz = 2 + 4/3 = 10/3.
+        #   t=5  visible R -> R, unchanged -> beta_hz = 13/3.
+        # Broken (accumulating through the opening run) adds exactly the orphaned
+        # (0.5, 0.5) from t=1: [13/6, 29/6, 1, 1].
+        positions = [[100.0 + 4 * t, 128.0] for t in range(6)]
+        colors = [_GRAY, _R, _R, _GRAY, _R, _R]
+        samples = torch.cat(
+            [
+                torch.tensor([positions], dtype=torch.float),
+                torch.tensor([colors], dtype=torch.float),
+            ],
+            dim=-1,
+        )
+        out = IdealCountingObserverV2()(samples, return_means=True)
+        assert torch.allclose(out["betas"][0], torch.tensor([5 / 3, 13 / 3, 1.0, 1.0]), atol=ATOL)
+
+    def test_opening_grayzone_betas_are_batch_invariant(self):
+        # DEFECT-1, the orphaned-flush half. On [GRAY, R, R] the exit guard
+        # `visible_now & inside_gray` cannot fire at t=1 (`inside_gray` starts
+        # False), so pre-fix the t=0->1 expected counts were neither flushed nor
+        # zeroed. Solo they simply leaked away; in a padded batch the pad step
+        # drives `inside_gray` True, and the end-of-sequence flush then banked
+        # them -- so the SAME sequence produced different betas depending on its
+        # batch-mates (broken: solo [1, 2, 1, 1] vs padded [1.5, 2.5, 1, 1]).
+        # The equality is the discriminating assertion; the [1, 2, 1, 1] value is
+        # shared with the broken solo path and is pinned only as a sanity anchor
+        # (only the visible R -> R step at t=2 may count, and it is `unchanged`).
+        pos_solo = [[100.0, 128.0], [104.0, 128.0], [108.0, 128.0]]
+        col_solo = [_GRAY, _R, _R]
+        solo = torch.cat(
+            [
+                torch.tensor([pos_solo], dtype=torch.float),
+                torch.tensor([col_solo], dtype=torch.float),
+            ],
+            dim=-1,
+        )
+        # a strictly longer, fully visible mate: row 0 gains one padded frame.
+        pos_mate = pos_solo + [[112.0, 128.0]]
+        col_mate = [_R, _R, _R, _R]
+        padded = torch.cat(
+            [
+                torch.tensor([pos_solo + [_PAD[:2]], pos_mate], dtype=torch.float),
+                torch.tensor([col_solo + [_PAD], col_mate], dtype=torch.float),
+            ],
+            dim=-1,
+        )
+        betas_solo = IdealCountingObserverV2()(solo, return_means=True)["betas"][0]
+        betas_padded = IdealCountingObserverV2()(padded, return_means=True)["betas"][0]
+        assert torch.allclose(betas_padded, betas_solo, atol=ATOL)
+        assert torch.allclose(betas_solo, torch.tensor([1.0, 2.0, 1.0, 1.0]), atol=ATOL)
