@@ -123,3 +123,25 @@ class TestPanelsTaskGraph:
 
         assert "visualization/paper_style.py" in info
         assert "visualization/transforms.py" in info
+
+    def test_fig2_depends_on_the_ideal_observer_module(self):
+        """fig2 memoizes ``IdealBayesianObserver`` output through joblib, so
+        an edit to ``ideal_observer.py`` must mark ``panels:fig2`` stale even
+        though the observer module is not imported by any of the other
+        figure scripts.
+        """
+        info = self._info("fig2")
+        assert "models/ideal_observer.py" in info, (
+            f"panels:fig2 does not depend on the ideal-observer module:\n{info}"
+        )
+
+    @pytest.mark.parametrize("fig_name", [n for n in EXPECTED_SUBTASKS if n != "fig2"])
+    def test_other_figures_do_not_depend_on_the_ideal_observer_module(self, fig_name):
+        """Only fig2 renders the ideal-observer curves; a dependency on the
+        observer module for any other figure would be a spurious coupling
+        that reruns unrelated panels on an unrelated edit.
+        """
+        info = self._info(fig_name)
+        assert "models/ideal_observer.py" not in info, (
+            f"panels:{fig_name} unexpectedly depends on the ideal-observer module:\n{info}"
+        )

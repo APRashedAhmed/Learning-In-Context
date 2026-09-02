@@ -55,6 +55,7 @@ untouched.
 from __future__ import annotations
 
 import hashlib
+import inspect
 import os
 import pickle
 from pathlib import Path
@@ -66,6 +67,7 @@ import torch
 from numpy.lib.stride_tricks import as_strided, sliding_window_view
 from scipy import stats
 
+from learning_in_context.models import ideal_observer as _ideal_observer_module
 from learning_in_context.models.ideal_observer import (
     IdealBayesianObserver,
     IdealCountingObserverV2,
@@ -109,6 +111,18 @@ FORCE_RECOMPUTE = os.environ.get("LIC_FIG_FORCE_RECOMPUTE", "").strip().lower() 
 }
 if FORCE_RECOMPUTE:
     MEMORY.clear(warn=False)
+
+
+# Digest of the ideal-observer module's source, computed once at import time.
+# joblib keys a memoized transform on the decorated function's own source plus
+# its bound arguments, so nothing about the observer's source reaches the cache
+# key on its own: an edit to the observer's semantics would leave every cached
+# belief curve reachable and silently stale. The whole module is hashed rather
+# than the observer class alone, because the class inherits its transition
+# machinery from a base class defined alongside it.
+IDEAL_OBSERVER_FINGERPRINT = hashlib.blake2b(
+    inspect.getsource(_ideal_observer_module).encode("utf-8"), digest_size=8
+).hexdigest()
 
 
 def clear_cache(memory: joblib.Memory | None = None) -> None:
@@ -1472,6 +1486,8 @@ def ideal_observer_belief_curves(
     idx_time: int | None = 2,
     exemplar_rank: int = 0,
     lead_in_frames: int = 5,
+    *,
+    observer_fingerprint: str = IDEAL_OBSERVER_FINGERPRINT,
 ) -> pd.DataFrame:
     """Ideal-observer colour-change probability for one trial, swept (memoized).
 
@@ -1512,6 +1528,12 @@ def ideal_observer_belief_curves(
             trial types that do not carry one.
         exemplar_rank: position in the sorted list of matching video ids.
         lead_in_frames: visible frames shown before the final occlusion.
+        observer_fingerprint: digest of the ideal-observer module's source,
+            defaulting to :data:`IDEAL_OBSERVER_FINGERPRINT`. It takes no part
+            in the computation and callers never pass it: it exists so that the
+            memo key changes whenever the observer's source changes, which
+            forces a recompute instead of re-serving a curve produced by an
+            earlier version of the observer.
 
     Returns:
         Tidy DataFrame, one row per (level, frame), with columns ``[level,

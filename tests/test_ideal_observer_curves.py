@@ -33,6 +33,7 @@ marked ``slow`` and ``integration``.
 from __future__ import annotations
 
 import ast
+import hashlib
 import inspect
 from pathlib import Path
 
@@ -47,6 +48,14 @@ try:
 except ImportError as exc:  # pragma: no cover - only if transforms.py itself breaks
     transforms = None  # type: ignore[assignment]
     _IMPORT_ERROR = exc
+
+try:
+    from learning_in_context.models import ideal_observer as _ideal_observer_module
+
+    _IDEAL_OBSERVER_IMPORT_ERROR: Exception | None = None
+except ImportError as exc:  # pragma: no cover - only if the observer module breaks
+    _ideal_observer_module = None  # type: ignore[assignment]
+    _IDEAL_OBSERVER_IMPORT_ERROR = exc
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 _DATASET = "control_dataset"
@@ -166,6 +175,96 @@ class TestIdealObserverBeliefCurvesSignature:
             "annotated as returning pd.DataFrame"
         )
         assert sig.return_annotation in (pd.DataFrame, "pd.DataFrame")
+
+    def test_has_a_keyword_only_observer_fingerprint_parameter(self):
+        """Guards the observer against silent cache staleness.
+
+        joblib keys ``ideal_observer_belief_curves``'s cache entries on the
+        wrapper's own source plus its bound arguments; nothing about
+        ``ideal_observer.py``'s source enters that key on its own. Threading
+        a fingerprint of the observer module through as a keyword-only
+        default closes that gap: ``filter_args`` binds defaults into the
+        hashed argument dict, so an edit to the observer's semantics changes
+        the fingerprint, which changes every call's cache key, which forces
+        a recompute instead of silently re-serving a stale curve.
+        """
+        sig = inspect.signature(transforms.ideal_observer_belief_curves)
+        params = sig.parameters
+        assert "observer_fingerprint" in params, (
+            "ideal_observer_belief_curves has no observer_fingerprint parameter"
+        )
+        observer_fingerprint = params["observer_fingerprint"]
+        assert observer_fingerprint.kind is inspect.Parameter.KEYWORD_ONLY, (
+            f"observer_fingerprint is {observer_fingerprint.kind}, expected "
+            "KEYWORD_ONLY so it cannot be passed positionally and shifted by "
+            "an unrelated signature change"
+        )
+        assert observer_fingerprint.default is transforms.IDEAL_OBSERVER_FINGERPRINT
+        assert observer_fingerprint.default == transforms.IDEAL_OBSERVER_FINGERPRINT
+
+    def test_the_fingerprint_is_not_excluded_from_the_cache_key(self):
+        """A fingerprint joblib is told to ignore guards nothing.
+
+        ``Memory.cache(ignore=[...])`` drops the named arguments before the
+        bound-argument dict is hashed, so listing ``observer_fingerprint``
+        there would leave the parameter on the signature while restoring the
+        exact staleness this feature exists to close. The behavioral check
+        below needs the real ``control_dataset`` artifacts and is skipped
+        without them; this one holds wherever the module imports.
+        """
+        fn = transforms.ideal_observer_belief_curves
+        assert "observer_fingerprint" in inspect.signature(fn).parameters, (
+            "ideal_observer_belief_curves has no observer_fingerprint "
+            "parameter, so this check would pass vacuously"
+        )
+        assert "observer_fingerprint" not in (fn.ignore or []), (
+            "observer_fingerprint is in the memoized function's ignore list, "
+            "so joblib strips it before hashing and it never reaches the "
+            "cache key"
+        )
+
+    def test_impl_helper_does_not_take_the_fingerprint(self):
+        """The wrapper strips the fingerprint before delegating to the impl.
+
+        The fingerprint exists only to participate in the joblib cache key;
+        the impl helper's own signature is unchanged by this feature, so it
+        must not gain the parameter too.
+        """
+        impl_sig = inspect.signature(transforms._ideal_observer_belief_curves_impl)
+        assert "observer_fingerprint" not in impl_sig.parameters, (
+            "_ideal_observer_belief_curves_impl must not take "
+            "observer_fingerprint; the wrapper computes/consumes it and "
+            "forwards only the original arguments"
+        )
+
+
+class TestIdealObserverFingerprint:
+    """Pins the fingerprint's derivation, not just its presence.
+
+    A fingerprint computed over the wrong scope (e.g. only the
+    ``IdealBayesianObserver`` class, omitting the base class it inherits
+    ``T`` from) would still satisfy the signature test above while failing
+    to actually change when the semantics it is meant to guard change.
+    """
+
+    def test_fingerprint_exists_and_is_a_16_char_lowercase_hex_string(self):
+        assert hasattr(transforms, "IDEAL_OBSERVER_FINGERPRINT")
+        fingerprint = transforms.IDEAL_OBSERVER_FINGERPRINT
+        assert isinstance(fingerprint, str)
+        assert len(fingerprint) == 16
+        assert fingerprint == fingerprint.lower()
+        int(fingerprint, 16)  # raises ValueError if not hex
+
+    def test_fingerprint_equals_a_blake2b_8_digest_of_the_whole_observer_module(self):
+        if _IDEAL_OBSERVER_IMPORT_ERROR is not None:
+            pytest.fail(
+                "learning_in_context.models.ideal_observer is not importable: "
+                f"{_IDEAL_OBSERVER_IMPORT_ERROR!r}"
+            )
+        expected = hashlib.blake2b(
+            inspect.getsource(_ideal_observer_module).encode("utf-8"), digest_size=8
+        ).hexdigest()
+        assert transforms.IDEAL_OBSERVER_FINGERPRINT == expected
 
 
 # --------------------------------------------------------------------------- #
@@ -340,6 +439,52 @@ class TestOutputSchema:
             idx_time=2,
         )
         assert df["video_id"].nunique() == 1
+
+
+@_needs_real_data
+class TestObserverFingerprintParticipatesInTheCacheKey:
+    """The fingerprint must actually change the cache key, not just exist.
+
+    ``check_call_in_cache`` inspects the function's own source plus the
+    hashed, ``filter_args``-normalized bound arguments without calling the
+    function or touching the filesystem cache's data, so it is the correct
+    joblib API for asserting membership: it answers exactly "is this call
+    already cached" without the side effects (or cost) of ``call``.
+    """
+
+    def test_default_call_is_cached_but_an_altered_fingerprint_is_not(self):
+        # Populate the cache for the default-argument call. This must not
+        # use LIC_FIG_FORCE_RECOMPUTE, which wipes the shared cache rather
+        # than scoping to this one call.
+        transforms.ideal_observer_belief_curves(
+            dataset=_DATASET,
+            trial_type="Straight",
+            sweep="hazard",
+            levels=_HAZARD_LEVELS,
+            idx_time=2,
+        )
+        assert transforms.ideal_observer_belief_curves.check_call_in_cache(
+            dataset=_DATASET,
+            trial_type="Straight",
+            sweep="hazard",
+            levels=_HAZARD_LEVELS,
+            idx_time=2,
+        ), (
+            "the call just made is not reported as cached; "
+            "check_call_in_cache disagrees with the call that just ran"
+        )
+        assert not transforms.ideal_observer_belief_curves.check_call_in_cache(
+            dataset=_DATASET,
+            trial_type="Straight",
+            sweep="hazard",
+            levels=_HAZARD_LEVELS,
+            idx_time=2,
+            observer_fingerprint="0" * 16,
+        ), (
+            "an explicit observer_fingerprint different from the real "
+            "default is reported as already cached; the fingerprint is not "
+            "participating in the cache key"
+        )
 
 
 @_needs_real_data

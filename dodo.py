@@ -1817,6 +1817,7 @@ FIGURES_SRC_DIR = PROJECT_ROOT / 'figures'
 PANELS_DIR = PROJECT_ROOT / 'figures' / 'panels'
 PAPER_STYLE_FILE = PROJECT_ROOT / 'src' / 'learning_in_context' / 'visualization' / 'paper_style.py'
 FIG_TRANSFORMS_FILE = PROJECT_ROOT / 'src' / 'learning_in_context' / 'visualization' / 'transforms.py'
+IDEAL_OBSERVER_FILE = PROJECT_ROOT / 'src' / 'learning_in_context' / 'models' / 'ideal_observer.py'
 
 # Representative, stable tier-1 artifacts each figure script reads (via
 # transforms.py). Deliberately a single stable file that
@@ -1840,7 +1841,8 @@ PARTICIPANT_IBO_MARKER = (
     CACHE_DIR / 'model_states' / 'participant_dataset' / 'ibo' / 'ibo-01.npz'
 )
 
-# name -> (targets relative to figures/panels/fig<N>/, tier-1 artifact deps)
+# name -> (targets relative to figures/panels/fig<N>/, tier-1 artifact deps, and
+# any extra source modules the figure's output depends on)
 PANEL_TASKS = {
     'fig2': {
         'script': FIGURES_SRC_DIR / 'fig2_ideal_observer.py',
@@ -1857,6 +1859,10 @@ PANEL_TASKS = {
             PARTICIPANT_IBO_MARKER,
             CACHE_DIR / 'participants' / 'participant_counts.json',
         ],
+        # The estimate-curve panels run the ideal Bayesian observer live, so
+        # the observer's source is an input to fig2's output the same way the
+        # shared style and transform modules are.
+        'code_deps': [IDEAL_OBSERVER_FILE],
     },
     'fig3': {
         'script': FIGURES_SRC_DIR / 'fig3_task_results.py',
@@ -1956,9 +1962,10 @@ def task_panels():
 
     One sub-task per figure script (``panels:fig2`` … ``panels:fig7``). Each
     sub-task runs its marimo script headlessly with the current interpreter
-    and depends on the script itself, the shared style/transform modules, and
-    a representative tier-1 artifact so `doit` reruns it when the upstream
-    data, style, or transforms change.
+    and depends on the script itself, the shared style/transform modules, a
+    representative tier-1 artifact, and any further source module the figure's
+    output is computed from (its ``code_deps``), so `doit` reruns it when the
+    upstream data, style, transforms, or that code change.
 
     EXAMPLES:
         doit panels          # regenerate every figure's panels
@@ -1969,9 +1976,11 @@ def task_panels():
         script = spec['script']
         out_dir = PANELS_DIR / fig_name
         targets = [str(out_dir / name) for name in spec['targets']]
-        file_dep = [str(script), str(PAPER_STYLE_FILE), str(FIG_TRANSFORMS_FILE)] + [
-            str(p) for p in spec['artifact_deps']
-        ]
+        file_dep = (
+            [str(script), str(PAPER_STYLE_FILE), str(FIG_TRANSFORMS_FILE)]
+            + [str(p) for p in spec['artifact_deps']]
+            + [str(p) for p in spec.get('code_deps', [])]
+        )
 
         yield {
             'name': fig_name,
