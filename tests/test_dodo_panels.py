@@ -22,6 +22,10 @@ EXPECTED_TARGETS = {
     "fig2": [
         "estimate_curve_hazard_rate.svg",
         "estimate_curve_contingency.svg",
+        "estimate_ctrl_hazard_change.svg",
+        "estimate_ctrl_hazard_nochange.svg",
+        "estimate_ctrl_contingency_change.svg",
+        "estimate_ctrl_contingency_nochange.svg",
         "cwc_hazard_rate.svg",
         "cwc_contingency.svg",
     ],
@@ -66,6 +70,7 @@ EXPECTED_TARGETS = {
     "fig7": [
         "cell_unit_interventions_all_models.svg",
         "gate_rescue_input_forget.svg",
+        "interventions_legend.svg",
         "gate_scatter_delta_forget_input.svg",
         "gate_scatter_delta_forget_input_unit_mean.svg",
     ],
@@ -133,6 +138,17 @@ class TestPanelsTaskGraph:
         info = self._info("fig2")
         assert "models/ideal_observer.py" in info, (
             f"panels:fig2 does not depend on the ideal-observer module:\n{info}"
+        )
+
+    def test_fig2_depends_on_the_controlled_inputs_module(self):
+        """The four controlled-rate panels build their stimulus with
+        ``controlled_inputs.controlled_estimate_input`` and memoize the counting
+        observer's output through joblib, so an edit to the constructor's
+        geometry must mark ``panels:fig2`` stale.
+        """
+        info = self._info("fig2")
+        assert "models/controlled_inputs.py" in info, (
+            f"panels:fig2 does not depend on the controlled-inputs module:\n{info}"
         )
 
     @pytest.mark.parametrize("fig_name", [n for n in EXPECTED_SUBTASKS if n != "fig2"])

@@ -150,3 +150,127 @@ class TestSavePanel:
         assert "tmp" in str(paper_style.PANELS_DIR) or not str(
             paper_style.PANELS_DIR
         ).startswith(str(paper_style._REPO_ROOT / "figures"))
+
+
+def _make_decor_fig():
+    """A drawn axes with a title, both labels, tick labels, and a legend."""
+    fig, ax = plt.subplots()
+    ax.plot([0, 1, 2], [0, 1, 0], label="series")
+    ax.set_title("Panel Title")
+    ax.set_xlabel("Frame")
+    ax.set_ylabel("Value")
+    ax.legend()
+    return fig, ax
+
+
+class TestApplyDecor:
+    """PanelDecor + apply_decor: the default is a strict no-op; each opted-in
+    field acts on exactly one piece of frame furniture."""
+
+    def test_default_is_noop_on_axes_state(self):
+        fig, ax = _make_decor_fig()
+        paper_style.apply_decor(ax, paper_style.PanelDecor())
+        assert ax.get_title() == "Panel Title"
+        assert ax.get_xlabel() == "Frame"
+        assert ax.get_ylabel() == "Value"
+        assert ax.get_legend() is not None
+        assert all(t.get_visible() for t in ax.get_xticklabels())
+        assert all(t.get_visible() for t in ax.get_yticklabels())
+
+    def test_default_is_byte_identical_export(self, _isolated_panels_dir):
+        # The invariant the pipeline promises: a panel that does not opt in
+        # re-exports byte-for-byte, so an un-decorated panel and one passed
+        # through PanelDecor() produce identical SVGs.
+        paper_style.apply_style()
+        fig_a, _ = _make_decor_fig()
+        path_a = paper_style.save_panel(fig_a, 9, "decor_control")
+        bytes_a = path_a.read_bytes()
+
+        fig_b, ax_b = _make_decor_fig()
+        paper_style.apply_decor(ax_b, paper_style.PanelDecor())
+        path_b = paper_style.save_panel(fig_b, 9, "decor_control")
+        assert path_b.read_bytes() == bytes_a
+
+    def test_hides_title_with_none(self):
+        fig, ax = _make_decor_fig()
+        paper_style.apply_decor(ax, paper_style.PanelDecor(title=None))
+        assert ax.get_title() == ""
+
+    def test_overrides_label_with_string(self):
+        fig, ax = _make_decor_fig()
+        paper_style.apply_decor(ax, paper_style.PanelDecor(xlabel="Alpha"))
+        assert ax.get_xlabel() == "Alpha"
+
+    def test_hides_ylabel_with_none(self):
+        fig, ax = _make_decor_fig()
+        paper_style.apply_decor(ax, paper_style.PanelDecor(ylabel=None))
+        assert ax.get_ylabel() == ""
+        # ylabel=None hides the label ONLY — the y tick numbers survive. This is
+        # what distinguishes it from PanelDecor.shared_y(), and it is the exact
+        # behaviour fig7's rescue panel relies on (operator direction
+        # 2026-09-04: drop the y-label, keep the y tick numbers).
+        assert all(t.get_visible() for t in ax.get_yticklabels())
+
+    def test_blanks_tick_labels_via_tick_params(self):
+        fig, ax = _make_decor_fig()
+        paper_style.apply_decor(
+            ax, paper_style.PanelDecor(xticklabels=False, yticklabels=False)
+        )
+        assert not any(t.get_visible() for t in ax.get_xticklabels())
+        assert not any(t.get_visible() for t in ax.get_yticklabels())
+
+    def test_strips_existing_legend(self):
+        fig, ax = _make_decor_fig()
+        assert ax.get_legend() is not None
+        paper_style.apply_decor(ax, paper_style.PanelDecor(legend=False))
+        assert ax.get_legend() is None
+
+    def test_legend_true_is_noop(self):
+        # legend=True is an explicit no-op: apply_decor has no handles to draw.
+        fig, ax = _make_decor_fig()
+        paper_style.apply_decor(ax, paper_style.PanelDecor(legend=True))
+        assert ax.get_legend() is not None
+
+    def test_shared_y_constructor(self):
+        fig, ax = _make_decor_fig()
+        paper_style.apply_decor(ax, paper_style.PanelDecor.shared_y())
+        assert ax.get_ylabel() == ""
+        assert not any(t.get_visible() for t in ax.get_yticklabels())
+
+    def test_no_legend_constructor(self):
+        fig, ax = _make_decor_fig()
+        paper_style.apply_decor(ax, paper_style.PanelDecor.no_legend())
+        assert ax.get_legend() is None
+
+    def test_convenience_constructor_accepts_overrides(self):
+        decor = paper_style.PanelDecor.shared_y(legend=False)
+        assert decor.ylabel is None
+        assert decor.yticklabels is False
+        assert decor.legend is False
+
+
+class TestMakeLegendPanel:
+    """make_legend_panel renders a legend alone on its own figure."""
+
+    @pytest.fixture(autouse=True)
+    def _apply_style_first(self):
+        paper_style.apply_style()
+
+    def test_only_artist_is_the_legend(self):
+        fig, ax = _make_decor_fig()
+        handles, labels = ax.get_legend_handles_labels()
+        leg_fig = paper_style.make_legend_panel(handles, labels, title="Type")
+        # No data axes on the legend figure; its sole artist is the legend.
+        assert leg_fig.axes == []
+        assert len(leg_fig.legends) == 1
+
+    def test_save_panel_writes_live_text_legend(self, _isolated_panels_dir):
+        fig, ax = _make_decor_fig()
+        ax.plot([0, 1], [0, 1], label="L2L")
+        handles, labels = ax.get_legend_handles_labels()
+        leg_fig = paper_style.make_legend_panel(handles, labels, title="Type")
+        out_path = paper_style.save_panel(leg_fig, 9, "legend_panel")
+        content = out_path.read_text()
+        assert out_path.suffix == ".svg"
+        assert "<text" in content
+        assert "L2L" in content

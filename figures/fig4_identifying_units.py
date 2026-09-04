@@ -75,14 +75,7 @@ def _():
     from learning_in_context.visualization import paper_style
     from learning_in_context.visualization import transforms
 
-    return (
-        np,
-        plt,
-        TwoSlopeNorm,
-        inset_axes,
-        paper_style,
-        transforms,
-    )
+    return TwoSlopeNorm, inset_axes, np, paper_style, plt, transforms
 
 
 @app.cell
@@ -103,8 +96,7 @@ def _(paper_style):
     # final physical size, so these inches are what the composed figure gets.
     FIGSIZE_SCORE = (paper_style.HALF_WIDTH, 1.7)
     FIGSIZE_HEATMAP = (paper_style.HALF_WIDTH, 2.6)
-
-    return DATASET, MODEL, EXP_ID, FIGSIZE_SCORE, FIGSIZE_HEATMAP
+    return DATASET, EXP_ID, FIGSIZE_HEATMAP, FIGSIZE_SCORE, MODEL
 
 
 @app.cell
@@ -174,7 +166,7 @@ def _(np, plt):
 
 
 @app.cell
-def _(np, plt, TwoSlopeNorm, inset_axes):
+def _(TwoSlopeNorm, inset_axes, np, plt):
     # Render helper — coefficient heatmap (ported from the source's ax3 block,
     # in its fixed form; colorbar labelled "Coefficient Value" to match the
     # composed figure and this repo's critical_units_plots.py, rather than the
@@ -222,12 +214,9 @@ def _(np, plt, TwoSlopeNorm, inset_axes):
         fig.tight_layout()
         return fig
 
-    return render_coef_heatmap
+    return (render_coef_heatmap,)
 
 
-# ---------------------------------------------------------------------------
-# Transforms (memoized ElasticNet regularization paths)
-# ---------------------------------------------------------------------------
 @app.cell
 def _(DATASET, EXP_ID, MODEL, transforms):
     # Hazard-rate: binary elastic-net logistic decode (single F1 line).
@@ -253,7 +242,7 @@ def _(DATASET, EXP_ID, MODEL, transforms):
 
 
 @app.cell
-def _(np, fit_hz, fit_cont):
+def _(fit_cont, fit_hz, np):
     # Vline index = last non-chance alpha (offset -3 for hz, -2 for cont, as
     # in the source notebooks).
     def _last_non_chance(metrics, offset):
@@ -262,20 +251,26 @@ def _(np, fit_hz, fit_cont):
 
     VLINE_HZ = _last_non_chance(fit_hz["metrics"], 3)
     VLINE_CONT = _last_non_chance(fit_cont["metrics"], 2)
-    return VLINE_HZ, VLINE_CONT
+    return VLINE_CONT, VLINE_HZ
 
 
-# ---------------------------------------------------------------------------
-# Panel B — hazard-rate score curve
-# ---------------------------------------------------------------------------
 @app.cell
 def _(mo):
-    mo.md(r"""## Panels B/C — Hazard rate""")
+    mo.md(r"""
+    ## Panels B/C — Hazard rate
+    """)
     return
 
 
 @app.cell
-def _(FIGSIZE_SCORE, VLINE_HZ, fit_hz, paper_style, render_score_curve, save_svgs):
+def _(
+    FIGSIZE_SCORE,
+    VLINE_HZ,
+    fit_hz,
+    paper_style,
+    render_score_curve,
+    save_svgs,
+):
     def _():
         fig = render_score_curve(
             metrics=fit_hz["metrics"],
@@ -295,7 +290,14 @@ def _(FIGSIZE_SCORE, VLINE_HZ, fit_hz, paper_style, render_score_curve, save_svg
 
 
 @app.cell
-def _(FIGSIZE_HEATMAP, VLINE_HZ, fit_hz, paper_style, render_coef_heatmap, save_svgs):
+def _(
+    FIGSIZE_HEATMAP,
+    VLINE_HZ,
+    fit_hz,
+    paper_style,
+    render_coef_heatmap,
+    save_svgs,
+):
     def _():
         fig = render_coef_heatmap(
             coefs=fit_hz["coefs"],
@@ -312,17 +314,23 @@ def _(FIGSIZE_HEATMAP, VLINE_HZ, fit_hz, paper_style, render_coef_heatmap, save_
     return
 
 
-# ---------------------------------------------------------------------------
-# Panel E — contingency score curve
-# ---------------------------------------------------------------------------
 @app.cell
 def _(mo):
-    mo.md(r"""## Panels E/F — Contingency""")
+    mo.md(r"""
+    ## Panels E/F — Contingency
+    """)
     return
 
 
 @app.cell
-def _(FIGSIZE_SCORE, VLINE_CONT, fit_cont, paper_style, render_score_curve, save_svgs):
+def _(
+    FIGSIZE_SCORE,
+    VLINE_CONT,
+    fit_cont,
+    paper_style,
+    render_score_curve,
+    save_svgs,
+):
     def _():
         fig = render_score_curve(
             metrics=fit_cont["metrics"],

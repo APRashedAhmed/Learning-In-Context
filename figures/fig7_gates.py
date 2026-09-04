@@ -2,7 +2,7 @@
 
 Ported into the paper-figure pipeline from three exploratory analysis notebooks
 in the sibling ``hmdcpd-analysis`` repo (contract in
-``tests/test_fig7_panels.py``). Four panels are rendered; panel A, the
+``tests/test_fig7_panels.py``). Five panels are rendered; panel A, the
 hand-drawn "rescue" schematic, is composed externally:
 
     cell_unit_interventions_all_models.svg  (panel B, left)
@@ -10,7 +10,13 @@ hand-drawn "rescue" schematic, is composed externally:
         fig6's "All Models Cell Unit Interventions" panel, exported into fig7's
         own namespace because panel paths are per-figure and stable. Built via
         the shared, memoized ``transforms.intervention_prediction_frame``
-        (landed with fig6).
+        (landed with fig6). Its Type legend is too large to sit in either point
+        plot, so it is stripped here and exported as its own panel below.
+
+    interventions_legend.svg                (standalone Type legend)
+        The Type (L2L/L2H/H2L/H2H) legend shared by both point plots, rendered
+        alone on its own figure via ``paper_style.make_legend_panel`` so it can
+        be placed independently when the figure is composed.
 
     gate_rescue_input_forget.svg            (panel B, right)
         Gate-frozen ("rescue") intervention point plot for the ``(i, f)`` gate
@@ -40,7 +46,7 @@ split from render cells; each panel of the composed figure is one
 self-contained SVG via ``save_panel``.
 
 Dual use: ``marimo edit figures/fig7_gates.py`` for interactive work; ``python
-figures/fig7_gates.py`` runs every cell top-to-bottom and lands the 4 SVGs
+figures/fig7_gates.py`` runs every cell top-to-bottom and lands the 5 SVGs
 under ``figures/panels/fig7/``.
 """
 
@@ -71,7 +77,7 @@ def _():
     from learning_in_context.visualization import paper_style
     from learning_in_context.visualization import transforms
 
-    return np, pd, plt, sns, paper_style, transforms
+    return np, paper_style, pd, plt, sns, transforms
 
 
 @app.cell
@@ -112,19 +118,18 @@ def _(np, paper_style):
 
     FIGSIZE_PP = paper_style.PANEL_SQUARE      # (3.0, 3.0) point plots
     FIGSIZE_SCATTER = paper_style.PANEL_SQUARE  # (3.0, 3.0) gate scatters
-
     return (
-        MODEL,
-        MODELS,
-        EXEMPLAR,
         ALPHAS,
-        N_HZ,
-        N_RESCUE,
-        FINAL_T,
-        GATE_PAIR,
-        TYPE_PALETTE,
+        EXEMPLAR,
         FIGSIZE_PP,
         FIGSIZE_SCATTER,
+        FINAL_T,
+        GATE_PAIR,
+        MODEL,
+        MODELS,
+        N_HZ,
+        N_RESCUE,
+        TYPE_PALETTE,
     )
 
 
@@ -148,9 +153,11 @@ def _(np, plt, sns):
     def render_pointplot(frame, final_timestep, title, palette, figsize):
         """Summary point plot: P(Final Color Change) vs Alpha, hue=Type.
 
-        Ported from the source notebooks' final point-plot cells; identical to
-        fig6.render_pointplot, ported here rather than imported so each figure
-        script stays independently readable.
+        Ported from the source notebooks' final point-plot cells (and fig6's
+        copy), ported here rather than imported so each figure script stays
+        independently readable. Draws full furniture by default and returns
+        ``(fig, ax)`` — matching ``plot_cwc_swarm`` — so the render cell can
+        choose per-panel decoration via ``paper_style.apply_decor``.
         """
         sub = frame[frame["Timestep"] == final_timestep]
         fig = plt.figure(figsize=figsize)
@@ -174,7 +181,7 @@ def _(np, plt, sns):
         ax.set_xticklabels(tick_labels)
         plt.title(title)
         fig.tight_layout()
-        return fig
+        return fig, ax
 
     def add_type(frame):
         # Type = <hazard>2<centroid>, e.g. 'L2H'. Centroid 0 -> 'L'.
@@ -219,28 +226,28 @@ def _(np, plt, sns):
         fig.tight_layout()
         return fig
 
-    return render_pointplot, add_type, render_gate_scatter
+    return add_type, render_gate_scatter, render_pointplot
 
 
-# ---------------------------------------------------------------------------
-# Panel B — "All Models" intervention point plots
-# ---------------------------------------------------------------------------
 @app.cell
 def _(mo):
-    mo.md(r"""## Intervention point plots (panel B)""")
+    mo.md(r"""
+    ## Intervention point plots (panel B)
+    """)
     return
 
 
 @app.cell
 def _(
     ALPHAS,
-    FINAL_T,
     FIGSIZE_PP,
+    FINAL_T,
     MODEL,
     MODELS,
     N_HZ,
     TYPE_PALETTE,
     add_type,
+    mo,
     paper_style,
     pd,
     render_pointplot,
@@ -258,25 +265,31 @@ def _(
             f = f[(f["trial"] == "Straight") & (f["idx_time"] == 2)]
             frames.append(add_type(f))
         frame = pd.concat(frames, ignore_index=True)
-        fig = render_pointplot(
+        fig, ax = render_pointplot(
             frame, FINAL_T,
             title="All Models Cell\nUnit Interventions",
             palette=TYPE_PALETTE, figsize=FIGSIZE_PP,
         )
+        # The Type legend is too large to sit in either point plot, so it moves
+        # to its own standalone panel: capture its handles BEFORE stripping it.
+        handles, labels = ax.get_legend_handles_labels()
+        paper_style.apply_decor(ax, paper_style.PanelDecor(legend=False))
+        leg = paper_style.make_legend_panel(handles, labels, title="Type")
         if save_svgs.value:
             paper_style.save_panel(fig, 7, "cell_unit_interventions_all_models")
-        return fig
+            paper_style.save_panel(leg, 7, "interventions_legend")
+        return [fig, leg]
 
-    _fig = _()
-    _fig
+    _figs = _()
+    mo.vstack(_figs)
     return
 
 
 @app.cell
 def _(
     ALPHAS,
-    FINAL_T,
     FIGSIZE_PP,
+    FINAL_T,
     GATE_PAIR,
     MODEL,
     MODELS,
@@ -303,10 +316,16 @@ def _(
         # Unquoted, comma-space gate-pair label, as published — interpolating
         # the raw tuple would render its repr, "('i', 'f')".
         pair = f"({GATE_PAIR[0]}, {GATE_PAIR[1]})"
-        fig = render_pointplot(
+        fig, ax = render_pointplot(
             frame, FINAL_T,
             title=f"All Models {pair} Gate\nRescue Interventions",
             palette=TYPE_PALETTE, figsize=FIGSIZE_PP,
+        )
+        # Legend lives in its own panel (see the left point plot); this panel
+        # also drops its y-label — the two point plots need not share an
+        # identical numeric range, so the left panel's y-label reads for both.
+        paper_style.apply_decor(
+            ax, paper_style.PanelDecor(legend=False, ylabel=None)
         )
         if save_svgs.value:
             paper_style.save_panel(fig, 7, "gate_rescue_input_forget")
@@ -317,12 +336,11 @@ def _(
     return
 
 
-# ---------------------------------------------------------------------------
-# Bottom row — delta gate-activity scatters
-# ---------------------------------------------------------------------------
 @app.cell
 def _(mo):
-    mo.md(r"""## Delta gate-activity scatters (bottom row)""")
+    mo.md(r"""
+    ## Delta gate-activity scatters (bottom row)
+    """)
     return
 
 

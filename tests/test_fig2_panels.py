@@ -1,6 +1,6 @@
 """Contract tests for ``figures/fig2_ideal_observer.py`` (marimo, dual-use).
 
-Figure 2 renders four panels under ``figures/panels/fig2/``:
+Figure 2 renders eight panels under ``figures/panels/fig2/``:
 
 * ``estimate_curve_hazard_rate.svg`` / ``estimate_curve_contingency.svg`` —
   line plots of the ideal Bayesian observer's belief curves, sourced from
@@ -9,6 +9,13 @@ Figure 2 renders four panels under ``figures/panels/fig2/``:
   The hazard variant sweeps ``pccnvc`` over the transform's default two
   levels; the contingency variant sweeps ``pccovc`` over three levels on
   wall-bounce trials (``trial_type="Bounce"``).
+* ``estimate_ctrl_hazard_change.svg`` / ``estimate_ctrl_hazard_nochange.svg``
+  / ``estimate_ctrl_contingency_change.svg`` /
+  ``estimate_ctrl_contingency_nochange.svg`` — the *counting* observer's
+  running rate estimate over a controlled input, sourced from
+  ``transforms.ideal_observer_estimate_curves``. Two ``channel="hz"`` calls
+  (one with, one without colour changes) and two ``channel="cont"`` calls
+  (both bouncing, one with and one without coincident colour changes).
 * ``cwc_hazard_rate.svg`` / ``cwc_contingency.svg`` — ideal-observer-only
   swarm-plus-mean panels drawn by ``cwc_plots.plot_cwc_swarm``, fed by
   ``transforms.model_cwc_by_hazard`` / ``transforms.model_cwc_by_contingency``
@@ -18,14 +25,14 @@ This file pins three tiers:
 
 1. Static script structure (AST-level, no data, no subprocess) — the script
    exists, is a marimo app, imports the right modules, avoids computing
-   inside the script what belongs in ``transforms``, names all four panels,
+   inside the script what belongs in ``transforms``, names all eight panels,
    and does not import the sibling ``hmdcpd-analysis`` repo or define its own
    observer class.
-2. Content contracts for the two transform families, checked against the
+2. Content contracts for the three transform families, checked against the
    script's own call sites via AST (and, where real cached data is present,
    against the transform's actual output) rather than against rendered SVGs.
 3. A headless-run tier (``python figures/fig2_ideal_observer.py``) that lands
-   exactly the four expected SVGs — freshly written by that run, not left over
+   exactly the eight expected SVGs — freshly written by that run, not left over
    from an earlier one — each carrying live text and real path data, and
    reproduces byte-identical output on a second run.
 
@@ -66,6 +73,10 @@ MODEL_STATES_DIR = REPO_ROOT / "data" / "cache" / "model_states"
 PANEL_BASENAMES = [
     "estimate_curve_hazard_rate",
     "estimate_curve_contingency",
+    "estimate_ctrl_hazard_change",
+    "estimate_ctrl_hazard_nochange",
+    "estimate_ctrl_contingency_change",
+    "estimate_ctrl_contingency_nochange",
     "cwc_hazard_rate",
     "cwc_contingency",
 ]
@@ -274,14 +285,14 @@ class TestScriptStructure:
             "learning_in_context.visualization.transforms instead"
         )
 
-    def test_save_panel_calls_name_exactly_the_four_expected_panels(self):
+    def test_save_panel_calls_name_exactly_the_eight_expected_panels(self):
         """Checks the actual ``save_panel`` call arguments, not prose.
 
         A docstring can list every panel name without a single ``save_panel``
         call actually using it (a typo'd name, a missing panel) — so this
         resolves the third argument (positional or ``name=``) of every
         ``save_panel(...)`` call in the script and compares that set against
-        the four expected panel names, rather than grepping the source text.
+        the eight expected panel names, rather than grepping the source text.
         """
         tree = _parse()
         constants = _module_constants(tree)
@@ -441,6 +452,96 @@ class TestEstimateCurveCallContracts:
             f"expected the contingency variant to pass trial_type='Bounce' "
             f"(the transform's default is 'Straight', so this must be "
             f"explicit); resolved trial_type={contingency['trial_type']!r}"
+        )
+
+
+class TestControlledEstimateCallContracts:
+    """AST-level pins on the four calls to ``ideal_observer_estimate_curves``.
+
+    The four controlled panels are four call-sites over one general transform:
+    two on the random (``channel="hz"``) channel — a stationary ball with and
+    without colour changes — and two on the contingent (``channel="cont"``)
+    channel — a bouncing ball with and without colour changes coincident with
+    the bounces. This pins that shape without rendering anything.
+    """
+
+    def _resolved(self) -> list[dict[str, object]]:
+        tree = _parse()
+        constants = _module_constants(tree)
+        calls = _calls_to(tree, "ideal_observer_estimate_curves")
+        out = []
+        for call in calls:
+            kwargs = _kwarg_nodes(call)
+            channel = _resolve(kwargs.get("channel"), constants)
+            # A missing frame-list kwarg means an empty schedule (the transform
+            # default), which is a real condition here, not an unresolved arg.
+            bounce = _resolve(kwargs["bounce_frames"], constants) if "bounce_frames" in kwargs else ()
+            colors = (
+                _resolve(kwargs["color_change_frames"], constants)
+                if "color_change_frames" in kwargs
+                else ()
+            )
+            out.append(
+                {
+                    "channel": channel,
+                    "has_bounce": bool(bounce),
+                    "has_colors": bool(colors),
+                }
+            )
+        return out
+
+    # The four panels are pinned by their (channel, has_bounce, has_colors)
+    # *shapes* rather than a raw call count: the shared-y-limit helper cell
+    # calls the transform too (with the same args as the hz panels, so they are
+    # cache hits), which would inflate a bare count. A shape set still catches a
+    # mis-wired panel — a missing condition drops its shape from the set.
+    _EXPECTED_SHAPES = {
+        ("hz", False, True),  # stationary, colour changes -> random channel
+        ("hz", False, False),  # stationary, no colour changes
+        ("cont", True, True),  # bouncing, coincident colour changes
+        ("cont", True, False),  # bouncing, no colour changes
+    }
+
+    def _shapes(self) -> set[tuple[object, bool, bool]]:
+        return {
+            (r["channel"], r["has_bounce"], r["has_colors"]) for r in self._resolved()
+        }
+
+    def test_at_least_four_calls_to_the_estimate_transform(self):
+        resolved = self._resolved()
+        assert len(resolved) >= 4, (
+            f"expected at least 4 calls to ideal_observer_estimate_curves (one "
+            f"per controlled panel); found {len(resolved)}"
+        )
+
+    def test_all_four_controlled_panel_shapes_are_present(self):
+        shapes = self._shapes()
+        missing = self._EXPECTED_SHAPES - shapes
+        assert not missing, (
+            f"controlled panel shape(s) not called: {sorted(missing)}; resolved "
+            f"shapes {sorted(shapes)}"
+        )
+
+    def test_no_unexpected_controlled_panel_shapes(self):
+        shapes = self._shapes()
+        unexpected = shapes - self._EXPECTED_SHAPES
+        assert not unexpected, (
+            f"unexpected controlled-estimate call shape(s): {sorted(unexpected)}; "
+            f"the four panels are {sorted(self._EXPECTED_SHAPES)}"
+        )
+
+    def test_hazard_panels_are_stationary_and_split_on_colour(self):
+        hz = {s for s in self._shapes() if s[0] == "hz"}
+        assert hz == {("hz", False, True), ("hz", False, False)}, (
+            f"the hazard (random) panels must be stationary (no bounce) with one "
+            f"colour-change condition and one without; resolved {sorted(hz)}"
+        )
+
+    def test_contingency_panels_bounce_and_split_on_colour(self):
+        cont = {s for s in self._shapes() if s[0] == "cont"}
+        assert cont == {("cont", True, True), ("cont", True, False)}, (
+            f"the contingent panels must both bounce with one coincident "
+            f"colour-change condition and one without; resolved {sorted(cont)}"
         )
 
 

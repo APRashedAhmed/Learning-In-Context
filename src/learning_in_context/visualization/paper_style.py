@@ -10,11 +10,13 @@ composing the figure, place panels at 100% and never rescale; a panel that does
 not fit gets its ``figsize`` changed here/in its script and re-exported.
 """
 
+from dataclasses import dataclass
 from pathlib import Path
 
 import matplotlib.pyplot as plt
 import seaborn as sns
 from matplotlib import font_manager
+from matplotlib.figure import Figure
 
 # --- Size vocabulary (inches; single-column journal layout ~7" text width) ---
 FULL_WIDTH = 7.0
@@ -132,3 +134,116 @@ def save_panel(fig, fig_no: int | str, name: str) -> Path:
         metadata={"Date": None},
     )
     return out_path
+
+
+# --- Per-panel decoration toggles ------------------------------------------
+# Panels are composed by hand in an external vector editor, so the author
+# chooses per panel which "frame furniture" — legend, axis labels, tick
+# labels — that panel draws. ``PanelDecor`` names those choices declaratively
+# and ``apply_decor`` applies them to an already-drawn axes as a post-process
+# step, generalizing the ``legend``/``xlabel``/``ylabel``/``title`` kwargs
+# that ``cwc_plots.plot_cwc_swarm`` already carries.
+
+
+class _Keep:
+    """Unique sentinel: "leave whatever the renderer already set"."""
+
+    __slots__ = ()
+
+    def __repr__(self) -> str:  # pragma: no cover - debug aid only
+        return "KEEP"
+
+
+KEEP = _Keep()
+
+
+@dataclass(frozen=True)
+class PanelDecor:
+    """Which frame furniture a panel draws, applied by :func:`apply_decor`.
+
+    For the label and legend fields the sentinel :data:`KEEP` means "leave what
+    the renderer set", ``None`` (or ``""`` for labels) means "hide", and a
+    string overrides the text. Tick-label fields are plain booleans. Every
+    default is the identity choice, so ``PanelDecor()`` is a literal no-op —
+    a panel that does not opt in re-exports byte-identical.
+    """
+
+    title: str | None | _Keep = KEEP  # KEEP=leave · None/""=hide · str=override
+    xlabel: str | None | _Keep = KEEP
+    ylabel: str | None | _Keep = KEEP
+    xticklabels: bool = True  # False -> tick_params(labelbottom=False)
+    yticklabels: bool = True  # False -> tick_params(labelleft=False)
+    legend: bool | _Keep = KEEP  # KEEP=leave · False=strip existing legend
+
+    # Convenience constructors named by what they SUPPRESS, never by grid
+    # position — composition is manual, so a position name would assert a layout
+    # this code cannot see or validate and would go stale silently.
+    @classmethod
+    def shared_y(cls, **over) -> "PanelDecor":
+        """Panel shares a neighbour's y-axis: hide its y-label and y ticks."""
+        return cls(ylabel=None, yticklabels=False, **over)
+
+    @classmethod
+    def shared_x(cls, **over) -> "PanelDecor":
+        """Panel shares a neighbour's x-axis: hide its x-label and x ticks."""
+        return cls(xlabel=None, xticklabels=False, **over)
+
+    @classmethod
+    def no_legend(cls, **over) -> "PanelDecor":
+        """Panel drops its legend (e.g. the legend moves to its own panel)."""
+        return cls(legend=False, **over)
+
+
+def apply_decor(ax, decor: PanelDecor) -> None:
+    """Apply a :class:`PanelDecor` spec to an already-drawn axes.
+
+    A mutating method is called only for a field that diverges from its default,
+    so ``PanelDecor()`` touches nothing and re-exports byte-identical. ``None``
+    (or ``""``) on a label hides it; a string overrides it. ``legend=False``
+    strips an existing legend; ``legend=True`` is an explicit no-op (this
+    post-processor has no handles with which to draw one).
+    """
+    if decor.title is not KEEP:
+        ax.set_title(decor.title or "")
+    if decor.xlabel is not KEEP:
+        ax.set_xlabel(decor.xlabel or "")
+    if decor.ylabel is not KEEP:
+        ax.set_ylabel(decor.ylabel or "")
+    if decor.xticklabels is False:
+        ax.tick_params(labelbottom=False)
+    if decor.yticklabels is False:
+        ax.tick_params(labelleft=False)
+    if decor.legend is False:
+        leg = ax.get_legend()
+        if leg is not None:
+            leg.remove()
+
+
+def make_legend_panel(
+    handles,
+    labels,
+    *,
+    title: str | None = None,
+    ncol: int = 1,
+    figsize: tuple[float, float] = (1.6, 1.2),
+    frameon: bool = True,
+    **legend_kw,
+) -> Figure:
+    """Render a legend alone on its own figure, for export as its own panel.
+
+    Grab ``handles, labels = ax.get_legend_handles_labels()`` from a rendered
+    panel, build the legend figure here, then export it with :func:`save_panel`
+    (which pins ``svg.hashsalt`` per name, so the legend panel is deterministic
+    too). The returned figure has no axes — its only artist is the legend.
+    """
+    fig = plt.figure(figsize=figsize)
+    fig.legend(
+        handles,
+        labels,
+        title=title,
+        ncol=ncol,
+        frameon=frameon,
+        loc="center",
+        **legend_kw,
+    )
+    return fig

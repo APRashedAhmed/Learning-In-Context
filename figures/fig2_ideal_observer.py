@@ -1,15 +1,25 @@
 """Figure 2 — ideal-observer panels (marimo, dual-use).
 
-Four panels (contract in ``tests/test_fig2_panels.py``), two per manipulation:
+Eight panels (contract in ``tests/test_fig2_panels.py``):
 
-    Estimate curves   estimate_curve_hazard_rate, estimate_curve_contingency
+    Belief curves     estimate_curve_hazard_rate, estimate_curve_contingency
+    Controlled rates  estimate_ctrl_hazard_change, estimate_ctrl_hazard_nochange,
+                      estimate_ctrl_contingency_change,
+                      estimate_ctrl_contingency_nochange
     Behaviour (CWC)   cwc_hazard_rate, cwc_contingency
 
-The estimate curves are the ideal Bayesian observer's per-frame probability
-that the ball's colour has changed since it was last visible, drawn on a single
+The belief curves are the ideal Bayesian observer's per-frame probability that
+the ball's colour has changed since it was last visible, drawn on a single
 exemplar trial with one task parameter swept across the curves — the hazard
 rate on a straight-path trial, the bounce contingency on a wall-bounce trial.
-The CWC panels are the same observer's end-of-trial responses, scored as
+
+The controlled-rate panels are the *counting* observer's running Beta-posterior
+estimate of a rate over a synthetic stimulus with events planted on exact
+frames: the random hazard estimate over a stationary ball (with and without
+colour changes), and the contingent estimate over a bouncing ball (with and
+without colour changes coincident with the bounces).
+
+The CWC panels are the Bayesian observer's end-of-trial responses, scored as
 confidence-weighted choices and summarised per condition.
 
 The two halves read different datasets, deliberately. The belief curves
@@ -22,7 +32,7 @@ sampled to the size of the surviving cohort.
 
 Dual use: ``marimo edit figures/fig2_ideal_observer.py`` for interactive work;
 ``python figures/fig2_ideal_observer.py`` runs every cell top-to-bottom (via
-``app.run()``) and lands the four SVGs under ``figures/panels/fig2/``.
+``app.run()``) and lands the eight SVGs under ``figures/panels/fig2/``.
 """
 
 import marimo
@@ -54,7 +64,17 @@ def _():
     from learning_in_context.analysis import participants
     from learning_in_context.visualization import cwc_plots, paper_style, transforms
 
-    return Path, cwc_plots, json, np, paper_style, participants, plt, sns, transforms
+    return (
+        Path,
+        cwc_plots,
+        json,
+        np,
+        paper_style,
+        participants,
+        plt,
+        sns,
+        transforms,
+    )
 
 
 @app.cell
@@ -97,8 +117,25 @@ def _(paper_style):
     CWC_SWARM_MAX = 0
 
     FIGSIZE = paper_style.PANEL_SQUARE
+
+    # --- Controlled-input estimate panels ----------------------------------
+    # The four controlled panels run the *counting* observer over a synthetic
+    # stimulus with events planted on exact frames, so its running rate
+    # estimates can be read against a known schedule. Retiming the whole panel
+    # family is a one-line edit here: the length and the event frames are the
+    # only geometry the panels bake in.
+    CTRL_LENGTH = 90
+    CTRL_EVENT_FRAMES = (30, 60)
+
+    # Informative prior for the random-hazard estimate: Beta(19, 1) has mean 0.05,
+    # a realistic baseline hazard, so the estimate starts near reality rather than
+    # at the neutral 0.5. (Order is (no-change, change) pseudo-counts.)
+    CTRL_HZ_PRIOR = (19, 1)
     return (
         CONTINGENCY_LEVELS,
+        CTRL_EVENT_FRAMES,
+        CTRL_HZ_PRIOR,
+        CTRL_LENGTH,
         CURVE_DATASET,
         CWC_DATASET,
         CWC_SWARM_MAX,
@@ -225,7 +262,68 @@ def _(paper_style, plt, sns):
         fig.tight_layout()
         return fig
 
-    return anchor_legend, render_belief_curves, style_gridlines
+    def render_estimate_curve(df, color, ylabel, figsize, ylim=None):
+        """One counting-observer rate-estimate curve over a controlled input.
+
+        Unlike the belief curves, these are not on a fixed 0–1 axis: the random
+        (hazard) estimate collapses towards the low empirical rate, so its steps
+        would vanish on a 0–1 axis. The y-axis is left autoscaled and only its
+        floor is pinned to zero, which keeps a rate reading as a probability
+        while letting each panel show its own dynamic range. Event frames — the
+        colour changes or bounces that drive this channel — are marked with a
+        dotted vertical line; the estimate steps one frame later, when the
+        observer banks the event.
+        """
+        marks = df.sort_values("frame")
+        fig, ax = plt.subplots(figsize=figsize)
+        for frame in marks.loc[marks["is_event"], "frame"]:
+            ax.axvline(frame, linestyle=":", color="black", linewidth=1, zorder=1)
+        sns.lineplot(
+            data=marks,
+            x="frame",
+            y="estimate",
+            color=color,
+            errorbar=None,  # one row per frame: nothing to aggregate
+            ax=ax,
+            zorder=2,
+        )
+        ax.set_xlabel("Frame")
+        ax.set_ylabel(ylabel)
+        if ylim is not None:
+            ax.set_ylim(*ylim)
+        else:
+            ax.set_ylim(bottom=0)
+        fig.tight_layout()
+        return fig
+
+    return (
+        anchor_legend,
+        render_belief_curves,
+        render_estimate_curve,
+        style_gridlines,
+    )
+
+
+@app.cell
+def _ctrl_hz_ylim(CTRL_EVENT_FRAMES, CTRL_HZ_PRIOR, CTRL_LENGTH, transforms):
+    # Shared y-limits for the two hazard panels so they read on one axis. Both
+    # curves start at the prior mean; the limit follows the larger with headroom.
+    _hz_change_curve = transforms.ideal_observer_estimate_curves(
+        channel="hz",
+        length=CTRL_LENGTH,
+        color_change_frames=CTRL_EVENT_FRAMES,
+        prior_pccnvc=CTRL_HZ_PRIOR,
+    )
+    _hz_nochange_curve = transforms.ideal_observer_estimate_curves(
+        channel="hz",
+        length=CTRL_LENGTH,
+        prior_pccnvc=CTRL_HZ_PRIOR,
+    )
+    CTRL_HZ_YLIM = (
+        0.0,
+        1.1 * max(_hz_change_curve["estimate"].max(), _hz_nochange_curve["estimate"].max()),
+    )
+    return (CTRL_HZ_YLIM,)
 
 
 @app.cell
@@ -316,6 +414,168 @@ def _(
         )
         if save_svgs.value:
             paper_style.save_panel(fig, 2, "estimate_curve_contingency")
+        return fig
+
+    _fig = _()
+    mo.vstack([_fig])
+    return
+
+
+@app.cell
+def _ctrl_header(mo):
+    mo.md(r"""
+    ## Controlled-input estimate panels — the counting observer's running rates
+
+    The counting observer accumulates evidence over a synthetic stimulus with
+    events planted on exact frames, and reports its Beta-posterior estimate of a
+    rate at every frame. The random (hazard, `pccnvc`) estimate collapses towards
+    the low empirical rate with a step up at each colour change; the contingent
+    (`pccovc`) estimate steps up at a bounce that changes colour and down at one
+    that does not. Each estimate steps one frame after its event, when the observer
+    banks it.
+    """)
+    return
+
+
+@app.cell
+def _(
+    CTRL_EVENT_FRAMES,
+    CTRL_HZ_PRIOR,
+    CTRL_HZ_YLIM,
+    CTRL_LENGTH,
+    FIGSIZE,
+    cwc_plots,
+    mo,
+    paper_style,
+    render_estimate_curve,
+    save_svgs,
+    transforms,
+):
+    def _():
+        # Hazard estimate over a stationary ball whose colour changes at the
+        # event frames: with no velocity event, every change routes to the
+        # random channel, so the estimate steps up one frame after each. The
+        # informative prior starts the estimate near a realistic hazard rate.
+        df = transforms.ideal_observer_estimate_curves(
+            channel="hz",
+            length=CTRL_LENGTH,
+            color_change_frames=CTRL_EVENT_FRAMES,
+            prior_pccnvc=CTRL_HZ_PRIOR,
+        )
+        color = paper_style.get_color_palette(
+            ["hz"], ((cwc_plots.SPLIT_FAMILY, (2, 1)),), linspace_range=cwc_plots.SPLIT_LINSPACE
+        )["hz"]
+        fig = render_estimate_curve(
+            df, color, "Estimated Hazard Rate", FIGSIZE, ylim=CTRL_HZ_YLIM
+        )
+        if save_svgs.value:
+            paper_style.save_panel(fig, 2, "estimate_ctrl_hazard_change")
+        return fig
+
+    _fig = _()
+    mo.vstack([_fig])
+    return
+
+
+@app.cell
+def _(
+    CTRL_HZ_PRIOR,
+    CTRL_HZ_YLIM,
+    CTRL_LENGTH,
+    FIGSIZE,
+    cwc_plots,
+    mo,
+    paper_style,
+    render_estimate_curve,
+    save_svgs,
+    transforms,
+):
+    def _():
+        # Hazard estimate over a stationary ball with no colour changes at all:
+        # the observer banks only failures, so the estimate decays from the prior
+        # mean towards zero. Shares the change panel's axis for direct comparison.
+        df = transforms.ideal_observer_estimate_curves(
+            channel="hz",
+            length=CTRL_LENGTH,
+            prior_pccnvc=CTRL_HZ_PRIOR,
+        )
+        color = paper_style.get_color_palette(
+            ["hz"], ((cwc_plots.SPLIT_FAMILY, (2, 1)),), linspace_range=cwc_plots.SPLIT_LINSPACE
+        )["hz"]
+        fig = render_estimate_curve(
+            df, color, "Estimated Hazard Rate", FIGSIZE, ylim=CTRL_HZ_YLIM
+        )
+        if save_svgs.value:
+            paper_style.save_panel(fig, 2, "estimate_ctrl_hazard_nochange")
+        return fig
+
+    _fig = _()
+    mo.vstack([_fig])
+    return
+
+
+@app.cell
+def _(
+    CTRL_EVENT_FRAMES,
+    CTRL_LENGTH,
+    FIGSIZE,
+    cwc_plots,
+    mo,
+    paper_style,
+    render_estimate_curve,
+    save_svgs,
+    transforms,
+):
+    def _():
+        # Contingent estimate over a bouncing ball whose colour changes at each
+        # bounce: every bounce is a success, so the estimate steps up one frame
+        # after each (0.5 → 2/3 → 3/4 under the neutral prior). Full 0–1 axis.
+        df = transforms.ideal_observer_estimate_curves(
+            channel="cont",
+            length=CTRL_LENGTH,
+            bounce_frames=CTRL_EVENT_FRAMES,
+            color_change_frames=CTRL_EVENT_FRAMES,
+        )
+        color = paper_style.get_color_palette(
+            ["cont"], ((cwc_plots.FAMILY, (3, 2)),), linspace_range=cwc_plots.SPLIT_LINSPACE
+        )["cont"]
+        fig = render_estimate_curve(df, color, "Estimated Contingency", FIGSIZE, ylim=(0, 1))
+        if save_svgs.value:
+            paper_style.save_panel(fig, 2, "estimate_ctrl_contingency_change")
+        return fig
+
+    _fig = _()
+    mo.vstack([_fig])
+    return
+
+
+@app.cell
+def _(
+    CTRL_EVENT_FRAMES,
+    CTRL_LENGTH,
+    FIGSIZE,
+    cwc_plots,
+    mo,
+    paper_style,
+    render_estimate_curve,
+    save_svgs,
+    transforms,
+):
+    def _():
+        # Contingent estimate over a bouncing ball whose colour never changes:
+        # every bounce is a failure, so the estimate steps down one frame after
+        # each (0.5 → 1/3 → 1/4 under the neutral prior). Full 0–1 axis.
+        df = transforms.ideal_observer_estimate_curves(
+            channel="cont",
+            length=CTRL_LENGTH,
+            bounce_frames=CTRL_EVENT_FRAMES,
+        )
+        color = paper_style.get_color_palette(
+            ["cont"], ((cwc_plots.FAMILY, (3, 2)),), linspace_range=cwc_plots.SPLIT_LINSPACE
+        )["cont"]
+        fig = render_estimate_curve(df, color, "Estimated Contingency", FIGSIZE, ylim=(0, 1))
+        if save_svgs.value:
+            paper_style.save_panel(fig, 2, "estimate_ctrl_contingency_nochange")
         return fig
 
     _fig = _()

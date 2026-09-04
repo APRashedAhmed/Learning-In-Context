@@ -1818,6 +1818,9 @@ PANELS_DIR = PROJECT_ROOT / 'figures' / 'panels'
 PAPER_STYLE_FILE = PROJECT_ROOT / 'src' / 'learning_in_context' / 'visualization' / 'paper_style.py'
 FIG_TRANSFORMS_FILE = PROJECT_ROOT / 'src' / 'learning_in_context' / 'visualization' / 'transforms.py'
 IDEAL_OBSERVER_FILE = PROJECT_ROOT / 'src' / 'learning_in_context' / 'models' / 'ideal_observer.py'
+CONTROLLED_INPUTS_FILE = (
+    PROJECT_ROOT / 'src' / 'learning_in_context' / 'models' / 'controlled_inputs.py'
+)
 
 # Representative, stable tier-1 artifacts each figure script reads (via
 # transforms.py). Deliberately a single stable file that
@@ -1849,6 +1852,10 @@ PANEL_TASKS = {
         'targets': [
             'estimate_curve_hazard_rate.svg',
             'estimate_curve_contingency.svg',
+            'estimate_ctrl_hazard_change.svg',
+            'estimate_ctrl_hazard_nochange.svg',
+            'estimate_ctrl_contingency_change.svg',
+            'estimate_ctrl_contingency_nochange.svg',
             'cwc_hazard_rate.svg',
             'cwc_contingency.svg',
         ],
@@ -1859,10 +1866,12 @@ PANEL_TASKS = {
             PARTICIPANT_IBO_MARKER,
             CACHE_DIR / 'participants' / 'participant_counts.json',
         ],
-        # The estimate-curve panels run the ideal Bayesian observer live, so
-        # the observer's source is an input to fig2's output the same way the
-        # shared style and transform modules are.
-        'code_deps': [IDEAL_OBSERVER_FILE],
+        # The belief-curve panels run the ideal Bayesian observer live and the
+        # controlled-rate panels run the counting observer over a controlled
+        # input, so both the observer's source and the controlled-input
+        # builder's source are inputs to fig2's output the same way the shared
+        # style and transform modules are.
+        'code_deps': [IDEAL_OBSERVER_FILE, CONTROLLED_INPUTS_FILE],
     },
     'fig3': {
         'script': FIGURES_SRC_DIR / 'fig3_task_results.py',
@@ -1927,6 +1936,7 @@ PANEL_TASKS = {
         'targets': [
             'cell_unit_interventions_all_models.svg',
             'gate_rescue_input_forget.svg',
+            'interventions_legend.svg',
             'gate_scatter_delta_forget_input.svg',
             'gate_scatter_delta_forget_input_unit_mean.svg',
         ],

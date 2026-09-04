@@ -9,19 +9,25 @@ unlettered scatter plots directly below them:
       text on a bordered rectangle, no plotted data), composed externally. No
       script generates it. EXCLUDED.
   B, left  - "All Models Cell Unit Interventions" point plot. x "Alpha"
-      (0.0-1.0), y "P(Final Color Change)" (~0.2-0.5), legend "Type": L2L /
-      H2L / L2H / H2H (flare-palette point-and-line series). This is the
-      REUSED cell-unit interventions panel -- same rendered content as fig6's
-      "All Models Cell Unit Interventions" panel, but exported into fig7's own
-      ``figures/panels/fig7/`` namespace, since panel paths are per-figure.
-      RENDERED -> IN.
+      (0.0-1.0), y "P(Final Color Change)" (~0.2-0.5). This is the REUSED
+      cell-unit interventions panel -- same rendered content as fig6's "All
+      Models Cell Unit Interventions" panel, but exported into fig7's own
+      ``figures/panels/fig7/`` namespace, since panel paths are per-figure. The
+      Type legend (L2L/H2L/L2H/H2H, flare-palette point-and-line series) is too
+      large to sit in the panel, so it is stripped here and exported as its own
+      panel (see "Type legend"). RENDERED -> IN.
   B, right - "All Models (i, f) Gate\\nRescue Interventions" point plot. Same
-      axes/legend shape as B-left (Alpha vs P(Final Color Change), Type:
-      L2L/H2L/L2H/H2H) but data comes from gate-frozen ("rescue")
-      interventions rather than cell-unit interventions, and the title names
-      the specific gate pair rendered: ``(i, f)`` -- the only gate pair the
-      paper shows, though the source loops over every
-      ``combinations(gate_order, 2)`` pair. RENDERED -> IN.
+      point-plot shape as B-left (Alpha vs P(Final Color Change)) but data
+      comes from gate-frozen ("rescue") interventions rather than cell-unit
+      interventions, and the title names the specific gate pair rendered:
+      ``(i, f)`` -- the only gate pair the paper shows, though the source loops
+      over every ``combinations(gate_order, 2)`` pair. Its Type legend is
+      likewise stripped (shared standalone legend), and it additionally drops
+      its y-axis label -- the two point plots need not share an identical
+      numeric range, so B-left's y-label reads for both. RENDERED -> IN.
+  Type legend - the L2L/L2H/H2L/H2H Type legend shared by the two point plots,
+      rendered ALONE on its own figure (no data axes) so it can be placed
+      independently when the figure is composed. RENDERED -> IN.
   Bottom-left  - untitled scatter. x "Delta Forget Gate Activity"
       (~-0.3..0.3), y "Delta Input Gate Activity" (~-0.3..0.3), legend:
       "Blue" / "Green" / "Red" (color_entered categories) + "Unity" (the
@@ -39,6 +45,7 @@ are the contract: the composed figure links to these paths, so an existing
 output is never renamed.
   B, left      -> cell_unit_interventions_all_models.svg
   B, right     -> gate_rescue_input_forget.svg
+  Type legend  -> interventions_legend.svg
   bottom-left  -> gate_scatter_delta_forget_input.svg
   bottom-right -> gate_scatter_delta_forget_input_unit_mean.svg
 
@@ -125,6 +132,7 @@ PANELS_DIR = REPO_ROOT / "figures" / "panels" / "fig7"
 EXPECTED_PANELS = [
     "cell_unit_interventions_all_models.svg",       # B, left (reused from fig6)
     "gate_rescue_input_forget.svg",                 # B, right ((i, f) pair)
+    "interventions_legend.svg",                     # standalone Type legend
     "gate_scatter_delta_forget_input.svg",           # bottom-left (single model)
     "gate_scatter_delta_forget_input_unit_mean.svg",  # bottom-right (aggregated)
 ]
@@ -232,29 +240,65 @@ class TestPanelOutputs:
 
 
 class TestPointPlotContent:
-    """Published text shared by the two Alpha-vs-P(Final Color Change)
-    point plots: axis labels and the Type legend (L2L/H2L/L2H/H2H).
+    """Frame furniture of the two Alpha-vs-P(Final Color Change) point plots.
+
+    Both keep the "Alpha" x-label and their titles. The Type legend
+    (L2L/H2L/L2H/H2H) has moved to its own ``interventions_legend.svg`` panel,
+    so it is absent from BOTH point plots. Only ``cell_unit_interventions_
+    all_models`` keeps the "P(Final Color Change)" y-label; the rescue panel
+    drops it (the two point plots need not share a numeric range). These strings
+    appear nowhere else in a matplotlib SVG, so the absence assertions are safe.
     """
 
     @pytest.mark.parametrize("panel_name", POINT_PLOT_PANELS)
-    def test_has_shared_axis_labels(self, fig7_run, panel_name):
+    def test_keeps_x_axis_label(self, fig7_run, panel_name):
         panel_path = PANELS_DIR / panel_name
         if not panel_path.exists():
             pytest.skip("panel not written; see test_writes_expected_panel")
         content = panel_path.read_text()
         assert "Alpha" in content, f"{panel_name} missing x-axis label"
-        assert "P(Final Color Change)" in content, (
-            f"{panel_name} missing y-axis label"
+
+    def test_cell_unit_panel_keeps_y_axis_label(self, fig7_run):
+        panel_path = PANELS_DIR / "cell_unit_interventions_all_models.svg"
+        if not panel_path.exists():
+            pytest.skip("panel not written; see test_writes_expected_panel")
+        content = panel_path.read_text()
+        assert "P(Final Color Change)" in content, "missing y-axis label"
+
+    def test_gate_rescue_panel_drops_y_axis_label(self, fig7_run):
+        panel_path = PANELS_DIR / "gate_rescue_input_forget.svg"
+        if not panel_path.exists():
+            pytest.skip("panel not written; see test_writes_expected_panel")
+        content = panel_path.read_text()
+        assert "P(Final Color Change)" not in content, (
+            "gate_rescue_input_forget should drop its y-axis label "
+            "(operator direction 2026-09-04)"
         )
 
     @pytest.mark.parametrize("panel_name", POINT_PLOT_PANELS)
-    def test_has_type_legend_entries(self, fig7_run, panel_name):
+    def test_type_legend_stripped_from_point_plots(self, fig7_run, panel_name):
+        # The Type legend moved to interventions_legend.svg; neither point plot
+        # carries it. L2L/H2L/L2H/H2H appear only in that legend text, so their
+        # absence here is a reliable check that the legend was stripped.
         panel_path = PANELS_DIR / panel_name
         if not panel_path.exists():
             pytest.skip("panel not written; see test_writes_expected_panel")
         content = panel_path.read_text()
         for entry in ("L2L", "H2L", "L2H", "H2H"):
-            assert entry in content, f"{panel_name} missing legend entry {entry!r}"
+            assert entry not in content, (
+                f"{panel_name} still carries Type legend entry {entry!r}; "
+                "it should live only in interventions_legend.svg"
+            )
+
+    def test_standalone_legend_has_type_entries(self, fig7_run):
+        panel_path = PANELS_DIR / "interventions_legend.svg"
+        if not panel_path.exists():
+            pytest.skip("panel not written; see test_writes_expected_panel")
+        content = panel_path.read_text()
+        for entry in ("L2L", "H2L", "L2H", "H2H"):
+            assert entry in content, (
+                f"interventions_legend.svg missing legend entry {entry!r}"
+            )
 
     def test_cell_unit_panel_title(self, fig7_run):
         panel_path = PANELS_DIR / "cell_unit_interventions_all_models.svg"

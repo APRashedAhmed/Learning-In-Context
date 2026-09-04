@@ -71,10 +71,10 @@ def _():
         Line2D,
         math,
         np,
+        paper_style,
         pd,
         plt,
         sns,
-        paper_style,
         transforms,
     )
 
@@ -121,23 +121,20 @@ def _(np, paper_style):
 
     FIGSIZE_TC = paper_style.PANEL_TUNING  # (2.5, 3.0) per-subplot; renderer widens
     FIGSIZE_PP = paper_style.PANEL_SQUARE  # (3.0, 3.0) point plots
-
     return (
-        MODEL,
-        EXP_ID,
-        NUM_ALPHAS,
         ALPHAS,
-        TIMESTEPS_PLOT,
-        N_CONT,
-        TIMESTEP_INTERVENTION,
         BOUNCE_IDX,
-        FINAL_T_HZ,
-        FINAL_T_CT,
-        MODELS,
-        TYPE_ORDER,
-        TYPE_PALETTE,
-        FIGSIZE_TC,
+        EXP_ID,
         FIGSIZE_PP,
+        FIGSIZE_TC,
+        FINAL_T_CT,
+        FINAL_T_HZ,
+        MODEL,
+        MODELS,
+        N_CONT,
+        TIMESTEPS_PLOT,
+        TIMESTEP_INTERVENTION,
+        TYPE_PALETTE,
         get_color_palette,
     )
 
@@ -155,7 +152,16 @@ def _(mo):
 
 
 @app.cell
-def _(FuncFormatter, Line2D, math, np, paper_style, plt, sns, get_color_palette):
+def _(
+    FuncFormatter,
+    Line2D,
+    get_color_palette,
+    math,
+    np,
+    paper_style,
+    plt,
+    sns,
+):
     # Render helpers (pure styling — each panel is self-contained: its own
     # axes, labels, and legend).
 
@@ -334,15 +340,14 @@ def _(FuncFormatter, Line2D, math, np, paper_style, plt, sns, get_color_palette)
         )
         return frame
 
-    return render_interventions_rows, render_pointplot, add_type
+    return add_type, render_interventions_rows, render_pointplot
 
 
-# ---------------------------------------------------------------------------
-# Hazard-rate block — straight trials (panels G/H, I/J)
-# ---------------------------------------------------------------------------
 @app.cell
 def _(mo):
-    mo.md(r"""## Hazard-rate block (straight trials)""")
+    mo.md(r"""
+    ## Hazard-rate block (straight trials)
+    """)
     return
 
 
@@ -350,10 +355,10 @@ def _(mo):
 def _(
     ALPHAS,
     EXP_ID,
+    FIGSIZE_TC,
     MODEL,
     TIMESTEPS_PLOT,
     TIMESTEP_INTERVENTION,
-    FIGSIZE_TC,
     mo,
     paper_style,
     render_interventions_rows,
@@ -390,19 +395,19 @@ def _(
 @app.cell
 def _(
     ALPHAS,
-    FINAL_T_HZ,
     FIGSIZE_PP,
+    FINAL_T_HZ,
     MODEL,
     MODELS,
     TIMESTEPS_PLOT,
     TYPE_PALETTE,
+    add_type,
     mo,
     paper_style,
     pd,
     render_pointplot,
     save_svgs,
     transforms,
-    add_type,
 ):
     def _():
         figs = []
@@ -433,12 +438,11 @@ def _(
     return
 
 
-# ---------------------------------------------------------------------------
-# Contingency block — wall-bounce trials (panels K/L, M/N)
-# ---------------------------------------------------------------------------
 @app.cell
 def _(mo):
-    mo.md(r"""## Contingency block (wall-bounce trials)""")
+    mo.md(r"""
+    ## Contingency block (wall-bounce trials)
+    """)
     return
 
 
@@ -447,10 +451,10 @@ def _(
     ALPHAS,
     BOUNCE_IDX,
     EXP_ID,
+    FIGSIZE_TC,
     MODEL,
     N_CONT,
     TIMESTEP_INTERVENTION,
-    FIGSIZE_TC,
     mo,
     paper_style,
     render_interventions_rows,
@@ -493,19 +497,19 @@ def _(
 def _(
     ALPHAS,
     BOUNCE_IDX,
-    FINAL_T_CT,
     FIGSIZE_PP,
+    FINAL_T_CT,
     MODEL,
     MODELS,
     N_CONT,
     TYPE_PALETTE,
+    add_type,
     mo,
     paper_style,
     pd,
     render_pointplot,
     save_svgs,
     transforms,
-    add_type,
 ):
     def _():
         # Panel N's title says "Cell", correcting the source's published

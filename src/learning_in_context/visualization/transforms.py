@@ -68,8 +68,10 @@ from numpy.lib.stride_tricks import as_strided, sliding_window_view
 from scipy import stats
 
 from learning_in_context.models import ideal_observer as _ideal_observer_module
+from learning_in_context.models.controlled_inputs import controlled_estimate_input
 from learning_in_context.models.ideal_observer import (
     IdealBayesianObserver,
+    IdealCountingObserver,
     IdealCountingObserverV2,
 )
 
@@ -117,9 +119,11 @@ if FORCE_RECOMPUTE:
 # joblib keys a memoized transform on the decorated function's own source plus
 # its bound arguments, so nothing about the observer's source reaches the cache
 # key on its own: an edit to the observer's semantics would leave every cached
-# belief curve reachable and silently stale. The whole module is hashed rather
-# than the observer class alone, because the class inherits its transition
-# machinery from a base class defined alongside it.
+# observer curve reachable and silently stale. Both observer transforms
+# (``ideal_observer_belief_curves`` and ``ideal_observer_estimate_curves``)
+# take this digest as a defaulted argument for that reason. The whole module is
+# hashed rather than one observer class alone, because the classes share the
+# transition machinery on a base class defined alongside them.
 IDEAL_OBSERVER_FINGERPRINT = hashlib.blake2b(
     inspect.getsource(_ideal_observer_module).encode("utf-8"), digest_size=8
 ).hexdigest()
@@ -1556,4 +1560,129 @@ def ideal_observer_belief_curves(
         idx_time,
         exemplar_rank,
         lead_in_frames,
+    )
+
+
+_ESTIMATE_CHANNELS = ("hz", "cont")  # "hz" -> pccnvc, "cont" -> pccovc
+
+
+def _ideal_observer_estimate_curves_impl(
+    channel: str,
+    length: int,
+    bounce_frames: tuple[int, ...],
+    color_change_frames: tuple[int, ...],
+    prior_pccnvc: tuple[int, int],
+    prior_pccovc: tuple[int, int],
+    prior_pvc: tuple[int, int],
+) -> pd.DataFrame:
+    """Estimate curve for one controlled input -- see :func:`ideal_observer_estimate_curves`."""
+    if channel not in _ESTIMATE_CHANNELS:
+        raise ValueError(
+            f"channel={channel!r} is not one of {sorted(_ESTIMATE_CHANNELS)}"
+        )
+
+    samples = controlled_estimate_input(
+        length=length,
+        bounce_frames=bounce_frames,
+        color_change_frames=color_change_frames,
+    )
+
+    observer = IdealCountingObserver(
+        prior_pvc=prior_pvc,
+        prior_pccovc=prior_pccovc,
+        prior_pccnvc=prior_pccnvc,
+        prog_bar=False,
+    )
+    _beliefs, means_pccnvc, means_pccovc, _means_pvc = observer(
+        samples, return_means=True
+    )
+    means = means_pccnvc if channel == "hz" else means_pccovc
+    estimate = means[0].detach().cpu().numpy()  # (T,)
+
+    # The event frames the panel marks are the ones that drive this channel's
+    # estimate: colour changes for the random (hz) channel, bounces for the
+    # contingent (cont) channel.
+    event_frames = set(color_change_frames) if channel == "hz" else set(bounce_frames)
+    frame = np.arange(length, dtype=np.int64)
+
+    return pd.DataFrame(
+        {
+            "frame": frame,
+            "estimate": estimate.astype(np.float64),
+            "channel": channel,
+            "is_event": [int(f) in event_frames for f in frame],
+        }
+    )
+
+
+@MEMORY.cache
+def ideal_observer_estimate_curves(
+    channel: str,
+    length: int = 90,
+    bounce_frames: tuple[int, ...] = (),
+    color_change_frames: tuple[int, ...] = (),
+    *,
+    prior_pccnvc: tuple[int, int] = (1, 1),
+    prior_pccovc: tuple[int, int] = (1, 1),
+    prior_pvc: tuple[int, int] = (1, 1),
+    observer_fingerprint: str = IDEAL_OBSERVER_FINGERPRINT,
+) -> pd.DataFrame:
+    """Counting-observer running rate estimate over a controlled input (memoized).
+
+    Builds a deterministic controlled stimulus via
+    :func:`~learning_in_context.models.controlled_inputs.controlled_estimate_input`
+    -- bounces and colour changes planted on exactly the requested frames -- and
+    runs :class:`~learning_in_context.models.ideal_observer.IdealCountingObserver`
+    over it, reporting the observer's per-frame Beta-posterior mean estimate of
+    one rate channel.
+
+    The observer accumulates counts over time and its estimate of a rate is the
+    posterior mean of a Beta distribution over the successes it has banked. The
+    counts enter the estimate after a two-frame head padding, and an event at
+    frame ``f`` is banked at frame ``f + 1``, so a step in the curve appears one
+    frame after the event it responds to.
+
+    Two channels are exposed:
+
+    * ``"hz"`` -> ``pccnvc``, the random hazard rate: the probability of a
+      colour change on a frame with no velocity event. Over a stationary input
+      (no ``bounce_frames``) every colour change routes here.
+    * ``"cont"`` -> ``pccovc``, the contingent rate: the probability of a colour
+      change coincident with a bounce. Over a bouncing input a coincident
+      colour change is a success and a bounce with no colour change a failure.
+
+    With the neutral ``Beta(1, 1)`` default priors every estimate starts at
+    ``0.5``.
+
+    Args:
+        channel: ``"hz"`` selects the ``pccnvc`` estimate, ``"cont"`` the
+            ``pccovc`` estimate.
+        length: number of frames in the controlled input.
+        bounce_frames: frames at which the ball bounces; empty for a stationary
+            ball. See :func:`controlled_estimate_input` for the geometry.
+        color_change_frames: frames at which the colour changes.
+        prior_pccnvc: ``(alpha, beta)`` prior for the random-hazard Beta.
+        prior_pccovc: ``(alpha, beta)`` prior for the contingent Beta.
+        prior_pvc: ``(alpha, beta)`` prior for the velocity-change Beta.
+        observer_fingerprint: digest of the ideal-observer module's source,
+            defaulting to :data:`IDEAL_OBSERVER_FINGERPRINT`. It takes no part
+            in the computation and callers never pass it: it exists so the memo
+            key changes whenever the observer's source changes, forcing a
+            recompute instead of re-serving a curve from an earlier version.
+
+    Returns:
+        Tidy DataFrame, one row per frame, with columns ``[frame, estimate,
+        channel, is_event]``. ``frame`` is zero-based; ``estimate`` is the
+        posterior-mean rate; ``channel`` is constant within a call; ``is_event``
+        marks the frames whose events drive this channel (colour changes for
+        ``"hz"``, bounces for ``"cont"``).
+    """
+    return _ideal_observer_estimate_curves_impl(
+        channel,
+        length,
+        tuple(bounce_frames),
+        tuple(color_change_frames),
+        prior_pccnvc,
+        prior_pccovc,
+        prior_pvc,
     )
